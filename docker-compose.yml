@@ -1,0 +1,109 @@
+version: '3.9'
+
+services:
+  # 后端 API 服务 (Python FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: telegram-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=mysql+pymysql://telegram:telegrampass@db:3306/telegramdb
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+      - backup-files:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - telegram-network
+    restart: unless-stopped
+
+  # Telegram 机器人
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: telegram-bot
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BACKEND_URL=http://backend:8000
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+    depends_on:
+      - backend
+    networks:
+      - telegram-network
+    restart: unless-stopped
+
+  # MySQL 数据库
+  db:
+    image: mysql:8.0
+    container_name: telegram-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpass}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-telegramdb}
+      - MYSQL_USER=${MYSQL_USER:-telegram}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-telegrampass}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - telegram-network
+    restart: unless-stopped
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: telegram-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - telegram-network
+    restart: unless-stopped
+
+  # Nginx 反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: telegram-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - backup-files:/backups:ro
+    depends_on:
+      - backend
+      - bot
+    networks:
+      - telegram-network
+    restart: unless-stopped
+
+volumes:
+  backup-files:
+    driver: local
+  mysql-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  telegram-network:
+    driver: bridge
