@@ -1,9 +1,9 @@
+# coding=utf-8
+import random
+
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-import json
-import random
-import os
 
 app = FastAPI(title="Telegram 安全验证后台")
 
@@ -520,83 +520,3 @@ async def sms():
 @app.get("/backups", response_class=HTMLResponse)
 async def backups():
     return html_backups
-
-# API 保持原有功能
-class PhoneGenerateRequest(BaseModel):
-    count: int = 1
-
-class ValidatePhoneRequest(BaseModel):
-    numbers: list
-
-class SendSMSRequest(BaseModel):
-    phone: str
-    content: str
-    sender: str = "WebPanel"
-
-def generate_hk_number():
-    prefixes = ['5', '6', '9']
-    prefix = random.choice(prefixes)
-    number = ''.join([str(random.randint(0, 9)) for _ in range(7)])
-    return f"+852{prefix}{number}"
-
-@app.post('/phone/generate')
-def generate_phone(request: PhoneGenerateRequest):
-    count = min(max(request.count, 1), 100)
-    generated = []
-    for i in range(count):
-        phone_id = len(phone_numbers_db) + i + 1
-        phone = generate_hk_number()
-        phone_numbers_db.append({
-            'id': phone_id, 'number': phone, 'country': 'HK',
-            'status': 'generated', 'create_time': 'now'
-        })
-        generated.append({'id': phone_id, 'number': phone})
-    return {'message': '生成成功', 'data': generated, 'count': count}
-
-@app.post('/phone/validate')
-def validate_phone(request: ValidatePhoneRequest):
-    results = []
-    for num in request.numbers:
-        is_valid = len(num) == 11 and num.startswith('+852') and num[3] in '569'
-        results.append({'number': num, 'is_valid': is_valid, 'status': 'valid' if is_valid else 'invalid'})
-    return {'data': results}
-
-@app.get('/phone/list')
-def list_phones(status: str = None):
-    phones = phone_numbers_db
-    if status:
-        phones = [p for p in phones if p['status'] == status]
-    return {'data': phones, 'total': len(phones)}
-
-@app.post('/sms/send')
-def send_sms(request: SendSMSRequest):
-    phone = request.phone
-    if len(phone) == 9:
-        phone = f"+852{phone}"
-    print(f"[SMS] 发送到 {phone}: {request.content}")
-    sms_id = len(sms_records_db) + 1
-    sms_records_db.append({
-        'id': sms_id, 'phone': phone, 'content': request.content,
-        'sender': request.sender, 'status': 'sent'
-    })
-    return {'message': '发送成功', 'sms_id': sms_id}
-
-@app.get('/sms/list')
-def list_sms():
-    return {'data': sms_records_db, 'total': len(sms_records_db)}
-
-@app.get('/health')
-def health():
-    return {'status': 'ok', 'version': '1.0.0'}
-
-@app.get('/backup/list')
-def list_backups():
-    return {'data': backup_files_db, 'total': len(backup_files_db)}
-
-@app.post('/backup/upload')
-async def upload_backup(file: UploadFile = File(...)):
-    return {'message': '上传成功', 'id': len(backup_files_db) + 1}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)

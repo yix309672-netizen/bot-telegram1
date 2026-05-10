@@ -12,8 +12,9 @@ services:
     environment:
       - DATABASE_URL=mysql+pymysql://telegram:telegrampass@db:3306/telegramdb
       - REDIS_URL=redis://redis:6379/0
+      - API_KEY=${API_KEY:-}
+      - ENABLE_AUTH=${ENABLE_AUTH:-false}
     volumes:
-      - ./backend:/app
       - backup-files:/backups
     depends_on:
       db:
@@ -86,9 +87,21 @@ services:
     container_name: telegram-nginx
     ports:
       - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - backup-files:/backups:ro
+    command: 
+      - sh
+      - -c
+      - |
+        echo 'worker_processes auto;
+        events { worker_connections 1024; }
+        http {
+          upstream backend { server backend:8000; }
+          server {
+            listen 80;
+            location /admin/ { proxy_pass http://backend; }
+            location /api/ { proxy_pass http://backend; }
+            location / { proxy_pass http://backend; }
+          }
+        }' > /etc/nginx/nginx.conf && nginx -g 'daemon off;'
     depends_on:
       - backend
       - bot

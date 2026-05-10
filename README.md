@@ -2,13 +2,13 @@
 
 ## 服务架构
 
-| 服务 | 端口 | 说明 |
-|------|------|------|
-| backend | 8000 | Python FastAPI 后端 |
-| bot | - | Telegram 机器人（长轮询） |
-| db (MySQL) | 3306 | 数据库 |
-| redis | 6379 | 缓存 |
-| nginx | 80/443 | 反向代理 |
+| 服务         | 端口     | 说明                |
+|------------|--------|-------------------|
+| backend    | 8000   | Python FastAPI 后端 |
+| bot        | -      | Telegram 机器人（长轮询） |
+| db (MySQL) | 3306   | 数据库               |
+| redis      | 6379   | 缓存                |
+| nginx      | 80/443 | 反向代理              |
 
 ## 目录结构
 
@@ -92,26 +92,26 @@ docker-compose down
 
 ### 号码管理
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
+| 方法   | 路径              | 说明     |
+|------|-----------------|--------|
 | POST | /phone/generate | 生成香港号码 |
-| POST | /phone/validate | 验证号码 |
-| GET | /phone/list | 号码列表 |
+| POST | /phone/validate | 验证号码   |
+| GET  | /phone/list     | 号码列表   |
 
 ### 短信管理
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
+| 方法   | 路径        | 说明   |
+|------|-----------|------|
 | POST | /sms/send | 发送短信 |
-| GET | /sms/list | 短信记录 |
+| GET  | /sms/list | 短信记录 |
 
 ### 备份管理
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | /backup/import | 导入备份文件 |
+| 方法   | 路径                  | 说明        |
+|------|---------------------|-----------|
+| POST | /backup/import      | 导入备份文件    |
 | POST | /backup/import_json | JSON 导入备份 |
-| GET | /health | 健康检查 |
+| GET  | /health             | 健康检查      |
 
 ## 注意事项
 

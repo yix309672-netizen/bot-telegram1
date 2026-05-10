@@ -3,9 +3,10 @@
 """Tests for converter_client.to_tdata wrapper using mocked httpx AsyncClient."""
 import asyncio
 import json
-import httpx
 import os
 import sys
+
+import httpx
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 LIB_PATH = os.path.normpath(os.path.join(ROOT, "lib"))
@@ -13,7 +14,6 @@ if LIB_PATH not in sys.path:
     sys.path.insert(0, LIB_PATH)
 
 from lib.converter_client import to_tdata
-import lib.converter_client
 
 
 class _DummyResp:

