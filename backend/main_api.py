@@ -4,6 +4,7 @@ import os
 import logging
 import hashlib
 import secrets
+import subprocess
 
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -26,6 +27,9 @@ SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_hex(32))
 phone_numbers_db = []
 sms_records_db = []
 sessions = {}
+
+# Bot process reference
+bot_process = None
 
 def verify_api_key(x_api_key: Optional[str] = Header(None)):
     if not ENABLE_AUTH:
@@ -332,6 +336,44 @@ def send_sms(request: SendSMSRequest, _: bool = Depends(verify_api_key)):
 @app.get('/api/sms/list')
 def list_sms():
     return {'data': sms_records_db, 'total': len(sms_records_db)}
+
+@app.get('/api/bot/status')
+def get_bot_status():
+    global bot_process
+    is_running = False
+    if bot_process is not None:
+        if bot_process.poll() is None:
+            is_running = True
+    return {'status': 'running' if is_running else 'stopped'}
+
+@app.post('/api/bot/start')
+def start_bot():
+    global bot_process
+    if bot_process is not None and bot_process.poll() is None:
+        return {'message': 'Bot is already running', 'status': 'running'}
+    try:
+        # Assuming bot is located at /workspace/bot/bot.py and we are in /workspace
+        bot_process = subprocess.Popen(['python', 'bot/bot.py'], cwd='/workspace')
+        return {'message': 'Bot started successfully', 'status': 'running'}
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+        return {'message': f'Failed to start bot: {str(e)}', 'status': 'error'}
+
+@app.post('/api/bot/stop')
+def stop_bot():
+    global bot_process
+    if bot_process is None or bot_process.poll() is not None:
+        return {'message': 'Bot is not running', 'status': 'stopped'}
+    try:
+        bot_process.terminate()
+        bot_process.wait(timeout=5)
+        return {'message': 'Bot stopped successfully', 'status': 'stopped'}
+    except Exception as e:
+        logger.error(f"Failed to stop bot: {e}")
+        # Force kill if terminate fails
+        if bot_process:
+            bot_process.kill()
+        return {'message': 'Bot stopped forcefully', 'status': 'stopped'}
 
 if __name__ == "__main__":
     import uvicorn
