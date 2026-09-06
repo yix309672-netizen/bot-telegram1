@@ -41,6 +41,19 @@ class SmsRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AuditLog(Base):
+    # 审计日志表：记录变更类请求（操作人/IP/路径/结果）
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(50), default="")
+    ip: Mapped[str] = mapped_column(String(50), default="")
+    method: Mapped[str] = mapped_column(String(10), default="")
+    path: Mapped[str] = mapped_column(String(255), default="")
+    status_code: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 def _default_sqlite_url() -> str:
     # 默认 SQLite 落到 backend/data/app.db，与代码同盘，开箱可用
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")

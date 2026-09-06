@@ -16,18 +16,20 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-try:
-    # 包方式运行（pytest / uvicorn backend.main_api:app）
-    from .core.database import get_db, init_db, PhoneNumber, SmsRecord
-    from .core.jwt_manager import JWTManager
-    from .core.cache import cache
-    from .core.security import SecurityUtils
-except ImportError:
+if __package__ in (None, ""):
     # 目录方式运行（Docker WORKDIR /app 内 uvicorn main_api:app）
-    from core.database import get_db, init_db, PhoneNumber, SmsRecord
+    from core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal
     from core.jwt_manager import JWTManager
     from core.cache import cache
     from core.security import SecurityUtils
+    from core.crypto import PasswordManager
+else:
+    # 包方式运行（pytest / uvicorn backend.main_api:app）
+    from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal
+    from .core.jwt_manager import JWTManager
+    from .core.cache import cache
+    from .core.security import SecurityUtils
+    from .core.crypto import PasswordManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,6 +54,52 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
 )
+
+# 接口限流：同一 IP 每分钟上限（环境变量可调，测试可 monkeypatch 本全局量）
+RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "100"))
+RATE_LIMIT_WINDOW = 60
+
+
+@app.middleware("http")
+async def rate_limit_and_audit(request: Request, call_next):
+    # 健康检查/文档/预检不计入，其他请求限流；变更类请求写审计（失败也不影响主流程）
+    path = request.url.path
+    if request.method == "OPTIONS" or path in ("/health", "/api/health", "/openapi.json") or path.startswith("/docs"):
+        return await call_next(request)
+    ip = SecurityUtils.get_client_ip(request)
+    try:
+        key = f"ratelimit:{ip}"
+        count = int(cache.incr(key))
+        if count == 1:
+            cache.expire(key, RATE_LIMIT_WINDOW)
+        if count > RATE_LIMIT_REQUESTS:
+            # 限流拒绝也带上 CORS 头，否则跨域页面读不到 429
+            resp = JSONResponse(status_code=429, content={"detail": "请求过于频繁，请稍后再试"})
+            origin = request.headers.get("origin", "")
+            if origin in _allowed_origins():
+                resp.headers["Access-Control-Allow-Origin"] = origin
+                resp.headers["Access-Control-Allow-Credentials"] = "true"
+                resp.headers["Vary"] = "Origin"
+            return resp
+    except Exception:
+        pass
+    response = await call_next(request)
+    if request.method in ("POST", "PUT", "DELETE", "PATCH") and not path.startswith("/docs"):
+        try:
+            session = get_session(request)
+            db = SessionLocal()
+            try:
+                db.add(AuditLog(
+                    username=(session or {}).get("username", ""),
+                    ip=ip, method=request.method, path=path,
+                    status_code=response.status_code,
+                ))
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"审计写入失败: {e}")
+    return response
 # 备份目录：优先用环境变量/Docker卷 /backups，不可写时回退到项目内 backups（跨平台）
 def _resolve_backup_dir():
     candidates = [
@@ -95,6 +143,18 @@ API_KEY = os.getenv("API_KEY")
 ENABLE_AUTH = os.getenv("ENABLE_AUTH", "false").lower() == "true"
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
+
+
+def _verify_admin_password(plain: str) -> bool:
+    # 生产用 argon2 哈希优先（ADMIN_PASSWORD_HASH），开发回退明文比对
+    if ADMIN_PASSWORD_HASH:
+        try:
+            return PasswordManager.verify_password(plain, ADMIN_PASSWORD_HASH)
+        except Exception as e:
+            logger.warning(f"哈希验密异常: {e}")
+            return False
+    return hash_password(plain) == hash_password(ADMIN_PASSWORD)
 # 密钥：优先环境变量（JWT_SECRET 兼容 security 配置），缺失则落盘复用，保证重启不掉线
 SECRET_KEY = os.getenv("JWT_SECRET", os.getenv("SECRET_KEY", ""))
 
@@ -408,7 +468,7 @@ async def login(request: Request, username: str = Form(default=""), password: st
     client_ip = SecurityUtils.get_client_ip(request)
     if _is_login_locked(client_ip):
         return HTMLResponse(LOGIN_PAGE + "<script>alert('失败次数过多，已锁定15分钟')</script>")
-    if username == ADMIN_USERNAME and hash_password(password) == hash_password(ADMIN_PASSWORD):
+    if username == ADMIN_USERNAME and _verify_admin_password(password):
         _clear_login_fail(client_ip)
         token = jwt_manager.create_access_token(user_id=1, username=ADMIN_USERNAME, role="admin", expires_delta=timedelta(hours=12))
         phone_count, sms_count = _db_counts(db)
@@ -510,6 +570,41 @@ def validate_phone(request: ValidatePhoneRequest, db: Session = Depends(get_db),
         db.rollback()
         logger.warning(f"验证状态回写失败（不影响判定结果）: {e}")
     return {'data': results}
+
+
+class ImportPhoneRequest(BaseModel):
+    numbers: List[str]
+
+
+@app.post('/api/phone/import')
+def import_phones(request: ImportPhoneRequest, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    # 批量导入外部号码：仅收有效香港号，重复/非法分别计数（供脚本与后台导入用）
+    imported, skipped_dup, skipped_invalid = 0, 0, []
+    for raw in request.numbers:
+        num = raw.replace(' ', '').replace('-', '').strip()
+        local = ''
+        if num.startswith('+852'):
+            local = num[4:]
+        elif num.startswith('852') and len(num) == 11:
+            local = num[3:]
+        elif len(num) == 8 and num.isdigit():
+            local = num
+        if not (len(local) == 8 and local.isdigit() and local[0] in '569'):
+            skipped_invalid.append(raw)
+            continue
+        full = f"+852{local}"
+        if db.query(PhoneNumber).filter(PhoneNumber.number == full).first():
+            skipped_dup += 1
+            continue
+        db.add(PhoneNumber(number=full, country="HK", status="valid", is_valid=True))
+        try:
+            db.commit()
+            imported += 1
+        except IntegrityError:
+            db.rollback()
+            skipped_dup += 1
+    return {'message': '导入完成', 'imported': imported,
+            'skipped_dup': skipped_dup, 'skipped_invalid': skipped_invalid}
 
 @app.get('/api/phone/list')
 def list_phones(status: Optional[str] = None, limit: int = 200, offset: int = 0, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):

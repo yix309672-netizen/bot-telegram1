@@ -21,7 +21,31 @@ from telethon import TelegramClient
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from lib.converter_client import to_tdata
+try:
+    # 本地/源码运行：复用共享客户端
+    from lib.converter_client import to_tdata
+except ImportError:
+    # 容器内无 lib 目录：内置同语义降级实现，避免启动即崩
+    import httpx
+
+    _FALLBACK_CONVERTER_URL = os.getenv("CONVERTER_URL", "http://localhost:8002/to-tdata")
+
+    async def to_tdata(payload):
+        timeout = httpx.Timeout(12.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                resp = await client.post(_FALLBACK_CONVERTER_URL, json=payload)
+                resp.raise_for_status()
+                try:
+                    return resp.json()
+                except ValueError:
+                    return {"error": "invalid_response", "detail": "Converter service did not return JSON"}
+            except httpx.TimeoutException:
+                return {"error": "timeout", "detail": "Converter service timed out"}
+            except httpx.HTTPStatusError as exc:
+                return {"error": "http_error", "status": exc.response.status_code, "detail": exc.response.text}
+            except Exception as exc:
+                return {"error": "unexpected_error", "detail": str(exc)}
 
 try:
     from opentele.td import TDesktop
