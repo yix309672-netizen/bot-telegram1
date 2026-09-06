@@ -158,6 +158,9 @@ html_index = '''
     <script>
         // 主接口地址（8000）：统计与业务写操作都走主接口，本页只做展示
         const API_BASE = 'http://localhost:8000';
+        // 跨端口调8000接口时自动带上登录 Cookie，后台开鉴权后按钮仍可用
+        const _rawFetch = window.fetch.bind(window);
+        window.fetch = (url, opts = {}) => _rawFetch(url, Object.assign({credentials: 'include'}, opts));
         async function loadStats() {
             try {
                 const [p, s] = await Promise.all([
@@ -302,6 +305,12 @@ html_phones = '''
 
     <script>
         const API_BASE = 'http://localhost:8000';
+        // 跨端口调8000接口时自动带上登录 Cookie，后台开鉴权后按钮仍可用
+        const _rawFetch2 = window.fetch.bind(window);
+        window.fetch = (url, opts = {}) => _rawFetch2(url, Object.assign({credentials: 'include'}, opts));
+        // 本页弹窗是行内 display 样式，直接开关（首页的 class 方案在此页无样式，不可用）
+        function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+        function closeModal(id) { document.getElementById(id).style.display = 'none'; }
         async function loadPhones() {
             const status = document.getElementById('statusFilter').value;
             const url = API_BASE + '/api/phone/list' + (status ? '?status=' + status : '');
@@ -476,6 +485,9 @@ html_sms = '''
 
     <script>
         const API_BASE = 'http://localhost:8000';
+        // 跨端口调8000接口时自动带上登录 Cookie，后台开鉴权后按钮仍可用
+        const _rawFetch3 = window.fetch.bind(window);
+        window.fetch = (url, opts = {}) => _rawFetch3(url, Object.assign({credentials: 'include'}, opts));
         async function loadSMS() {
             try {
                 const res = await fetch(API_BASE + '/api/sms/list');

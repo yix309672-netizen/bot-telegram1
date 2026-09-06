@@ -9,6 +9,7 @@ import subprocess
 from datetime import timedelta
 
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, List
@@ -32,6 +33,25 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TeleBot API")
+
+# 跨域：8002 展示页要调 8000 的接口，真浏览器需预检放行；允许携带 Cookie 凭证
+def _allowed_origins():
+    extra = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+    defaults = [
+        "http://localhost:8000", "http://127.0.0.1:8000",
+        "http://localhost:8002", "http://127.0.0.1:8002",
+        "http://localhost:3000", "http://127.0.0.1:3000",
+    ]
+    return list(dict.fromkeys(extra + defaults))
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+)
 # 备份目录：优先用环境变量/Docker卷 /backups，不可写时回退到项目内 backups（跨平台）
 def _resolve_backup_dir():
     candidates = [
@@ -137,15 +157,19 @@ def _clear_login_fail(ip: str) -> None:
 # Bot process reference
 bot_process = None
 
-def verify_api_key(x_api_key: Optional[str] = Header(None)):
+def verify_api_key(request: Request, x_api_key: Optional[str] = Header(None)):
     if not ENABLE_AUTH:
+        return True
+    # 方式一：API Key（给外部程序调用）
+    if API_KEY and x_api_key == API_KEY:
+        return True
+    # 方式二：后台登录态 JWT Cookie（给页面按钮用，同源自动带、同站跨端口需 credentials:include）
+    if get_session(request):
         return True
     if not API_KEY:
         logger.warning("API_KEY未配置，已禁用认证")
         return True
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-    return True
+    raise HTTPException(status_code=401, detail="Invalid API Key")
 
 def get_session(request: Request):
     # JWT 会话：从 Cookie 取 token 验签，无状态，重启不掉线
@@ -293,7 +317,7 @@ ADMIN_HOME = HTML_TEMPLATE.replace("{% block content %}{% endblock %}", """
   <h2>快速操作</h2>
   <a href="/admin/phones" class="btn">📱 号码管理</a>
   <a href="/admin/sms" class="btn">💬 短信记录</a>
-  <a href="/api/phone/generate" class="btn" target="_blank">🔧 测试生成</a>
+  <button class="btn" onclick="fetch('/api/phone/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:1})}).then(r=>r.json()).then(d=>alert('生成成功：'+(d.data[0]?d.data[0].number:'')))">🔧 测试生成</button>
 </div>
 """)
 
