@@ -13,3 +13,4 @@ cryptography>=41.0
 passlib[argon2]>=1.7
 PyJWT>=2.8
 opentele>=0.10
+python-dotenv>=1.0

@@ -20,6 +20,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 import httpx
 
+try:
+    # 本地开发自动载入项目根 .env（已有的系统环境变量优先，不覆盖）
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"), override=False)
+except ImportError:
+    pass
+
 if __package__ in (None, ""):
     # 目录方式运行（Docker WORKDIR /app 内 uvicorn main_api:app）
     from core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
