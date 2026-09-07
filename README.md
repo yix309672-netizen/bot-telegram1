@@ -109,12 +109,18 @@ docker-compose down
 | GET  | /api/phone/list     | 号码列表（status/limit/offset） |
 | DELETE | /api/phone/{id}   | 按ID删除     |
 
-### 短信管理
+### 短信管理（队列状态机）
 
 | 方法   | 路径          | 说明       |
 |------|-------------|----------|
-| POST | /api/sms/send | 发送短信（入队，投递由客户端执行） |
-| GET  | /api/sms/list | 短信记录（limit/offset） |
+| POST | /api/sms/send | 入队（queued） |
+| POST | /api/sms/claim | worker认领最老件（→sending，超时5分钟自动回收） |
+| POST | /api/sms/{id}/complete | 回执 sent/failed（失败<3次回队列，≥3次终结） |
+| POST | /api/sms/{id}/requeue | 失败件重发（管理员） |
+| GET  | /api/sms/list | 短信记录（limit/offset/status过滤） |
+
+投递由机器人内 worker 执行（`SMS_WORKER_ENABLED=true`，轮询 `SMS_POLL_INTERVAL` 秒，
+发送会话 `SMS_SENDER_SESSION`，无会话时只认领占位不吞件）。
 
 ### 备份管理
 

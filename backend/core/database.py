@@ -29,16 +29,19 @@ class PhoneNumber(Base):
 
 
 class SmsRecord(Base):
-    # 短信记录表
+    # 短信记录表（含队列状态机：queued → sending → sent / failed，可重试）
     __tablename__ = "sms_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     phone: Mapped[str] = mapped_column(String(20), index=True)
     content: Mapped[str] = mapped_column(Text)
     sender: Mapped[str] = mapped_column(String(50), default="TelegramBot")
-    status: Mapped[str] = mapped_column(String(20), default="queued")
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     note: Mapped[str] = mapped_column(String(255), default="")
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(String(500), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class AuditLog(Base):
@@ -158,8 +161,31 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 
 
 def init_db() -> None:
-    # 建表（已存在则跳过）
+    # 建表（已存在则跳过）+ 存量表补列（SQLite/MySQL 通用）
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
+
+
+def _ensure_columns() -> None:
+    from sqlalchemy import inspect, text
+    wanted = {
+        "sms_records": [("retry_count", "INTEGER DEFAULT 0"), ("error", "VARCHAR(500) DEFAULT ''"),
+                        ("updated_at", "DATETIME NULL")],
+    }
+    try:
+        existing = {t: {c["name"] for c in inspect(engine).get_columns(t)} for t in wanted}
+    except Exception as e:
+        logger.warning(f"表结构探测失败: {e}")
+        return
+    with engine.begin() as conn:
+        for table, cols in wanted.items():
+            for name, ddl in cols:
+                if name not in existing.get(table, set()):
+                    try:
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                        logger.info(f"补列 {table}.{name}")
+                    except Exception as e:
+                        logger.warning(f"补列失败 {table}.{name}: {e}")
 
 
 def get_db():

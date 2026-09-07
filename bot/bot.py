@@ -520,8 +520,78 @@ async def handle_message(update, context):
         return
     await update.message.reply_text("请发送 /start 重新开始验证，或点击按钮操作。", reply_markup=create_restart_button())
 
+import httpx
+
+# 短信投递 worker 配置：认领统一后端队列，经 Telethon 发送会话投递
+SMS_WORKER_ENABLED = os.getenv("SMS_WORKER_ENABLED", "true").lower() == "true"
+SMS_POLL_INTERVAL = int(os.getenv("SMS_POLL_INTERVAL", "15"))
+SMS_SENDER_SESSION = os.getenv("SMS_SENDER_SESSION", "")
+SMS_API_KEY = os.getenv("API_KEY", "")
+
+
+def _sms_headers():
+    return {"X-API-Key": SMS_API_KEY} if SMS_API_KEY else {}
+
+
+async def sms_worker_loop():
+    # 后台循环：认领→发送→回执；无发送会话/后端不可达时只告警不吞件
+    warned = False
+    sender = None
+    if SMS_SENDER_SESSION:
+        try:
+            from telethon.sessions import StringSession
+            sender = TelegramClient(StringSession(SMS_SENDER_SESSION), API_ID, API_HASH)
+            await sender.connect()
+            if not await sender.is_user_authorized():
+                logger.warning("短信发送会话未授权，worker 空转（已认领件超时后自动回收）")
+                sender = None
+        except Exception as e:
+            logger.warning(f"短信发送会话初始化失败，worker 空转: {e}")
+            sender = None
+    claim_url = f"{API_URL}/api/sms/claim"
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                item = (await client.post(claim_url, headers=_sms_headers())).json().get("data")
+            if not item:
+                await asyncio.sleep(SMS_POLL_INTERVAL)
+                continue
+            if sender is None:
+                if not warned:
+                    logger.warning("未配置 SMS_SENDER_SESSION，短信仅认领占位，超时后自动回收（配会话后真投递）")
+                    warned = True
+                await asyncio.sleep(SMS_POLL_INTERVAL * 4)
+                continue
+            try:
+                await sender.send_message(item["phone"], item["content"])
+                result = {"status": "sent"}
+                logger.info(f"短信已投递 id={item['id']} {item['phone']}")
+            except telethon.errors.rpcerrorlist.FloodWaitError as e:
+                result = {"status": "failed", "error": f"FloodWait {e.seconds}s"}
+                logger.warning(f"短信限流 id={item['id']}，等待 {e.seconds}s")
+                await asyncio.sleep(min(e.seconds, 300))
+            except Exception as e:
+                result = {"status": "failed", "error": str(e)[:200]}
+                logger.warning(f"短信投递失败 id={item['id']}: {e}")
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    await client.post(f"{API_URL}/api/sms/{item['id']}/complete",
+                                      json=result, headers=_sms_headers())
+            except Exception as e:
+                logger.warning(f"回执失败 id={item['id']}: {e}")
+        except Exception as e:
+            logger.warning(f"短信认领失败（后端不可达？）: {e}")
+            await asyncio.sleep(SMS_POLL_INTERVAL * 2)
+
+
+async def post_init(app):
+    if SMS_WORKER_ENABLED:
+        app.create_task(sms_worker_loop(), name="sms-worker")
+        logger.info("短信投递 worker 已启动")
+
+
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("restart", handle_restart))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))

@@ -229,7 +229,16 @@ html_sms = '''
         </nav>
     </div>
     <div class="container">
+        <div style="margin-bottom:10px; display:flex; gap:10px;">
         <button class="btn btn-success" onclick="document.getElementById('smsModal').style.display='flex'">📤 发送短信</button>
+        <select id="smsStatusFilter" onchange="loadSMS()" style="padding: 10px; border-radius: 6px;">
+            <option value="">全部状态</option>
+            <option value="queued">排队中</option>
+            <option value="sending">投递中</option>
+            <option value="sent">已发送</option>
+            <option value="failed">失败</option>
+        </select>
+        </div>
         <div class="card" style="margin-top:20px">
             <table>
                 <thead>
@@ -240,6 +249,7 @@ html_sms = '''
                         <th>👤 发送者</th>
                         <th>📊 状态</th>
                         <th>📅 时间</th>
+                        <th>⚡ 操作</th>
                     </tr>
                 </thead>
                 <tbody id="smsTable">
@@ -263,7 +273,8 @@ html_sms = '''
         const API_BASE = '';
         async function loadSMS() {
             try {
-                const res = await fetch(API_BASE + '/api/sms/list');
+                const status = document.getElementById('smsStatusFilter').value;
+                const res = await fetch(API_BASE + '/api/sms/list' + (status ? '?status=' + status : ''));
                 const data = await res.json();
                 renderTable(data.data || []);
             } catch(e) { console.error(e); }
@@ -272,7 +283,7 @@ html_sms = '''
         function renderTable(records) {
             const tbody = document.getElementById('smsTable');
             if(records.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center">暂无数据</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center">暂无数据</td></tr>';
                 return;
             }
             tbody.innerHTML = records.map(r => `
@@ -283,8 +294,18 @@ html_sms = '''
                     <td>${r.sender || r.Sender}</td>
                     <td><span class="status status-${r.status || r.Status}">${r.status || r.Status}</span></td>
                     <td>${new Date(r.sent_time || r.SentAt || r.CreatedAt).toLocaleString()}</td>
+                    <td>${(r.status === 'failed') ? `<button class="btn" style="padding:5px 10px; font-size:12px;" onclick="requeueSMS(${r.id})">重发</button>` : ''}</td>
                 </tr>
             `).join('');
+        }
+
+        async function requeueSMS(id) {
+            try {
+                const res = await fetch(API_BASE + '/api/sms/' + id + '/requeue', {method: 'POST'});
+                const data = await res.json();
+                alert(data.message || data.detail || '完成');
+                loadSMS();
+            } catch(e) { alert('❌ ' + e); }
         }
 
         async function sendSMS() {

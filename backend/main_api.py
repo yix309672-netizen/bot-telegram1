@@ -323,7 +323,13 @@ def _phone_to_dict(p: PhoneNumber) -> dict:
 
 def _sms_to_dict(s: SmsRecord) -> dict:
     return {"id": s.id, "phone": s.phone, "content": s.content,
-            "sender": s.sender, "status": s.status}
+            "sender": s.sender, "status": s.status,
+            "retry_count": s.retry_count or 0, "error": s.error or ""}
+
+
+# 短信队列：认领超时分钟数与最大重试次数
+CLAIM_TIMEOUT_MIN = 5
+SMS_MAX_RETRY = 3
 
 class BackupPayload(BaseModel):
     account_id: int
@@ -464,8 +470,11 @@ def metrics_overview(db: Session = Depends(get_db)):
     valid_count = db.query(PhoneNumber).filter(PhoneNumber.status == 'valid').count()
     sms_count = db.query(SmsRecord).count()
     audit_count = db.query(AuditLog).count()
+    queue = {}
+    for st in ("queued", "sending", "sent", "failed"):
+        queue[st] = db.query(SmsRecord).filter(SmsRecord.status == st).count()
     return {'phones': phone_count, 'valid_phones': valid_count, 'sms': sms_count,
-            'backups': len(_list_backup_files()), 'audit': audit_count}
+            'backups': len(_list_backup_files()), 'audit': audit_count, 'sms_queue': queue}
 
 
 @app.get('/api/metrics/recent')
@@ -826,12 +835,74 @@ def send_sms(request: SendSMSRequest, db: Session = Depends(get_db), _: bool = D
     return {'message': '发送成功', 'sms_id': row.id, 'phone': phone, 'status': 'queued'}
 
 @app.get('/api/sms/list')
-def list_sms(limit: int = 200, offset: int = 0, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+def list_sms(limit: int = 200, offset: int = 0, status: Optional[str] = None,
+             db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
     limit = min(max(limit, 1), 1000)
     q = db.query(SmsRecord).order_by(SmsRecord.id.desc())
+    if status:
+        q = q.filter(SmsRecord.status == status)
     total = q.count()
     rows = q.offset(max(offset, 0)).limit(limit).all()
     return {'data': [_sms_to_dict(s) for s in rows], 'total': total}
+
+
+@app.post('/api/sms/claim')
+def claim_sms(db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    # worker认领：取最老排队项，超时未回执的sending一并回收
+    deadline = datetime.utcnow() - timedelta(minutes=CLAIM_TIMEOUT_MIN)
+    row = (db.query(SmsRecord)
+           .filter(SmsRecord.status == "queued")
+           .order_by(SmsRecord.id)
+           .first())
+    if not row:
+        row = (db.query(SmsRecord)
+               .filter(SmsRecord.status == "sending", (SmsRecord.updated_at == None) | (SmsRecord.updated_at < deadline))
+               .order_by(SmsRecord.id)
+               .first())
+    if not row:
+        return {'message': '队列为空', 'data': None}
+    row.status = "sending"
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(row)
+    return {'message': '认领成功', 'data': _sms_to_dict(row)}
+
+
+class SmsResult(BaseModel):
+    status: str  # sent | failed
+    error: str = ""
+
+
+@app.post('/api/sms/{sms_id}/complete')
+def complete_sms(sms_id: int, body: SmsResult, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    if body.status not in ("sent", "failed"):
+        raise HTTPException(status_code=422, detail="状态非法")
+    row = db.query(SmsRecord).filter(SmsRecord.id == sms_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    if row.status not in ("sending", "queued"):
+        raise HTTPException(status_code=409, detail=f"当前状态{row.status}不可回执")
+    if body.status == "sent":
+        row.status, row.error = "sent", ""
+    else:
+        row.retry_count = (row.retry_count or 0) + 1
+        row.error = body.error[:500]
+        # 未超重试回队列，超限终结为失败
+        row.status = "queued" if row.retry_count < SMS_MAX_RETRY else "failed"
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    return {'message': '回执成功', 'data': _sms_to_dict(row)}
+
+
+@app.post('/api/sms/{sms_id}/requeue')
+def requeue_sms(sms_id: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(SmsRecord).filter(SmsRecord.id == sms_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    row.status, row.retry_count, row.error = "queued", 0, ""
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    return {'message': '已重发（回队列）', 'data': _sms_to_dict(row)}
 
 @app.get('/api/bot/status')
 def get_bot_status():

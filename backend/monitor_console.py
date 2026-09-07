@@ -194,6 +194,12 @@ html_console = """<!DOCTYPE html>
 <button onclick="auditLoad()" class="op-btn gray mt-2">刷新</button>
 </div>
 <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+<h4 class="text-sm font-semibold mb-3">短信队列</h4>
+<div id="sms-queue" class="font-mono text-xs text-gray-400 mb-2"></div>
+<div id="sms-failed" class="font-mono text-xs text-gray-400 mb-2 max-h-24 overflow-y-auto"></div>
+<button onclick="smsQueueLoad()" class="op-btn gray">刷新</button>
+</div>
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
 <h4 class="text-sm font-semibold mb-3">商城（分类/商品）</h4>
 <div class="flex gap-2 mb-2"><input id="cate-title" class="op-input" placeholder="新分类名"><button onclick="cateAdd()" class="op-btn">加分类</button></div>
 <div id="cate-list" class="font-mono text-xs text-gray-400 mb-2 max-h-24 overflow-y-auto"></div>
@@ -287,7 +293,20 @@ async function opImport(){
 async function opSms(){
   const r = await jpost('/api/sms/send', {phone:document.getElementById('sms-phone').value, content:document.getElementById('sms-content').value, sender:'Console'});
   document.getElementById('sms-result').textContent = r.status===200 ? ('已入队 id='+r.data.sms_id) : '失败: '+JSON.stringify(r.data);
-  refreshAll();
+  refreshAll(); smsQueueLoad();
+}
+async function smsQueueLoad(){
+  const ov = await jget('/api/metrics/overview');
+  const q = ov.sms_queue || {};
+  document.getElementById('sms-queue').innerHTML =
+    '排队 '+(q.queued||0)+' · 投递中 '+(q.sending||0)+' · 成功 '+(q.sent||0)+' · 失败 '+(q.failed||0);
+  const f = await jget('/api/sms/list?status=failed&limit=10');
+  document.getElementById('sms-failed').innerHTML = ((f.data||[]).map(x =>
+    '<div>#'+x.id+' '+x.phone+' 重试'+x.retry_count+' <a href="javascript:smsRequeue('+x.id+')" class="text-yellow-400">重发</a></div>').join('')) || '无失败件';
+}
+async function smsRequeue(id){
+  const r = await fetch('/api/sms/'+id+'/requeue', {method:'POST'});
+  alert((await r.json()).message || '完成'); smsQueueLoad(); refreshAll();
 }
 async function opBot(act){
   const r = await jpost('/api/bot/'+act, {});
@@ -406,7 +425,7 @@ async function goodsDel(id){
   if (!confirm('删除商品 '+id+'？')) return;
   await fetch('/api/mall/goods/'+id, {method:'DELETE'}); mallLoad();
 }
-function mgmtRefresh(){ cfgLoad(); upLoad(); tokenLoad(); userLoad(); botLogLoad(); auditLoad(); mallLoad(); document.getElementById('bak-list').innerHTML = '备份目录文件请见 <a href="/admin/backups" class="text-blue-400">备份管理页</a>'; }
+function mgmtRefresh(){ cfgLoad(); upLoad(); tokenLoad(); userLoad(); botLogLoad(); auditLoad(); mallLoad(); smsQueueLoad(); document.getElementById('bak-list').innerHTML = '备份目录文件请见 <a href="/admin/backups" class="text-blue-400">备份管理页</a>'; }
 refreshAll();
 setInterval(refreshAll, 3000);
 mgmtRefresh();
