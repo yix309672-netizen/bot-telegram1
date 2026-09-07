@@ -130,13 +130,18 @@ docker-compose down
 | GET | /health  | 健康检查            |
 | POST | /to-tdata | session 转 tdata（需 opentele） |
 
-### 展示页（统一后端8000）
+### 展示页与监控台（统一后端8000）
 
 | 页面 | 路径（登录态/公开别名） |
 |----|------------------|
 | 号码管理 | /admin/phones · /phones |
 | 短信记录 | /admin/sms · /sms |
 | 备份管理 | /admin/backups · /backups |
+| 实时监控台 | /admin/console · /console |
+
+实时监控台（UI 改编自 joshhu/uitest #31，MIT）：指标卡/请求图表/日志流/服务健康
+3 秒轮询，外加生成/验证/导入/短信/机器人启停/转换测试六组快捷操作。
+聚合接口：`/api/metrics/overview` `/api/metrics/recent` `/api/system/status`（公开只读）。
 
 ## 生产安全配置
 

@@ -6,6 +6,8 @@ import logging
 import hashlib
 import secrets
 import subprocess
+import time
+from collections import deque
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends, Request
@@ -18,20 +20,22 @@ from sqlalchemy.exc import IntegrityError
 
 if __package__ in (None, ""):
     # 目录方式运行（Docker WORKDIR /app 内 uvicorn main_api:app）
-    from core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal
+    from core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
     from core.jwt_manager import JWTManager
-    from core.cache import cache
+    from core.cache import cache, is_redis_live
     from core.security import SecurityUtils
     from core.crypto import PasswordManager
     from display_pages import html_phones, html_sms, render_backups_page
+    from monitor_console import html_console
 else:
     # 包方式运行（pytest / uvicorn backend.main_api:app）
-    from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal
+    from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
     from .core.jwt_manager import JWTManager
-    from .core.cache import cache
+    from .core.cache import cache, is_redis_live
     from .core.security import SecurityUtils
     from .core.crypto import PasswordManager
     from .display_pages import html_phones, html_sms, render_backups_page
+    from .monitor_console import html_console
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -62,6 +66,18 @@ RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "100"))
 RATE_LIMIT_WINDOW = 60
 
 
+# 请求日志环（监控台实时图表与日志流数据源，内存保留最近500条）
+request_journal = deque(maxlen=500)
+
+
+def _journal_level(status_code: int) -> str:
+    if status_code >= 500:
+        return "ERROR"
+    if status_code >= 400:
+        return "WARN"
+    return "INFO"
+
+
 @app.middleware("http")
 async def rate_limit_and_audit(request: Request, call_next):
     # 健康检查/文档/预检不计入，其他请求限流；变更类请求写审计（失败也不影响主流程）
@@ -86,6 +102,18 @@ async def rate_limit_and_audit(request: Request, call_next):
     except Exception:
         pass
     response = await call_next(request)
+    # 监控台日志环：健康检查与指标自查不记，避免轮询污染图表
+    if not path.startswith("/health") and not path.startswith("/api/metrics"):
+        try:
+            request_journal.append({
+                "t": datetime.now().strftime("%H:%M:%S"),
+                "method": request.method,
+                "path": path,
+                "status": response.status_code,
+                "level": _journal_level(response.status_code),
+            })
+        except Exception:
+            pass
     if request.method in ("POST", "PUT", "DELETE", "PATCH") and not path.startswith("/docs"):
         try:
             session = get_session(request)
@@ -381,6 +409,7 @@ ADMIN_HOME = HTML_TEMPLATE.replace("{% block content %}{% endblock %}", """
   <a href="/admin/phones" class="btn">📱 号码管理</a>
   <a href="/admin/sms" class="btn">💬 短信记录</a>
   <a href="/admin/backups" class="btn">📦 备份管理</a>
+  <a href="/admin/console" class="btn">📊 实时监控台</a>
   <button class="btn" onclick="fetch('/api/phone/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:1})}).then(r=>r.json()).then(d=>alert('生成成功：'+(d.data[0]?d.data[0].number:'')))">🔧 测试生成</button>
 </div>
 """)
@@ -400,9 +429,50 @@ def root_redirect():
     from fastapi.responses import RedirectResponse
     return RedirectResponse('/admin/', status_code=302)
 
-@app.get('/api/', include_in_schema=False)
-def api_root():
+@app.get('/api/metrics/overview')
+def metrics_overview(db: Session = Depends(get_db)):
+    # 监控台指标卡：一口聚合（公开只读）
+    phone_count = db.query(PhoneNumber).count()
+    valid_count = db.query(PhoneNumber).filter(PhoneNumber.status == 'valid').count()
+    sms_count = db.query(SmsRecord).count()
+    audit_count = db.query(AuditLog).count()
+    return {'phones': phone_count, 'valid_phones': valid_count, 'sms': sms_count,
+            'backups': len(_list_backup_files()), 'audit': audit_count}
+
+
+@app.get('/api/metrics/recent')
+def metrics_recent():
+    # 监控台图表+日志流：按分钟分桶的请求量与最近明细（公开只读）
+    per_min = {}
+    for e in request_journal:
+        per_min[e["t"][:5]] = per_min.get(e["t"][:5], 0) + 1
+    minutes = sorted(per_min)[-20:]
+    buckets = [per_min[m] for m in minutes] if minutes else [0] * 20
+    entries = list(request_journal)[-30:]
+    entries.reverse()
+    return {'buckets': buckets, 'labels': minutes, 'entries': entries}
+
+
+@app.get('/api/system/status')
+def system_status():
+    # 监控台服务健康：各依赖真实探活（公开只读）
+    bot_alive = bot_process is not None and bot_process.poll() is None
+    try:
+        from opentele.td import TDesktop  # noqa
+        opentele_ok = True
+    except ImportError:
+        opentele_ok = False
     return {
+        'backend': {'ok': True, 'label': '统一后端:8000'},
+        'database': {'ok': True, 'label': 'SQLite' if DATABASE_URL.startswith('sqlite') else 'MySQL'},
+        'redis': {'ok': is_redis_live(), 'label': 'Redis' if is_redis_live() else '内存降级'},
+        'bot': {'ok': bot_alive, 'label': '机器人运行中' if bot_alive else '机器人未运行'},
+        'converter': {'ok': opentele_ok, 'label': '转换可用' if opentele_ok else '转换降级'},
+    }
+
+
+@app.get('/api/', include_in_schema=False)
+def api_root():    return {
         'service': 'TeleBot API',
         'version': '1.0.0',
         'endpoints': [
@@ -410,10 +480,17 @@ def api_root():
             '/api/phone/list',
             '/api/phone/generate',
             '/api/phone/validate',
+            '/api/phone/import',
             '/api/sms/list',
             '/api/sms/send',
             '/api/backup/import',
             '/api/backup/import_json',
+            '/api/metrics/overview',
+            '/api/metrics/recent',
+            '/api/system/status',
+            '/to-tdata',
+            '/console',
+            '/admin/console',
         ]
     }
 
@@ -504,6 +581,15 @@ def admin_backups(request: Request):
     if request.url.path.startswith('/admin'):
         require_login(request)
     return HTMLResponse(render_backups_page(_list_backup_files()))
+
+
+@app.get('/admin/console', response_class=HTMLResponse)
+@app.get('/console', response_class=HTMLResponse)
+def monitor_console_page(request: Request):
+    # 统一实时监控台（31号风格）；/admin/* 需登录，/console 公开展示
+    if request.url.path.startswith('/admin'):
+        require_login(request)
+    return HTMLResponse(html_console)
 
 
 class ToTdataBackup(BaseModel):
