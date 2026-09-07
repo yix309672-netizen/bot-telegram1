@@ -28,7 +28,7 @@ except ImportError:
     # 容器内无 lib 目录：内置同语义降级实现，避免启动即崩
     import httpx
 
-    _FALLBACK_CONVERTER_URL = os.getenv("CONVERTER_URL", "http://localhost:8002/to-tdata")
+    _FALLBACK_CONVERTER_URL = os.getenv("CONVERTER_URL", "http://localhost:8000/to-tdata")
 
     async def to_tdata(payload):
         timeout = httpx.Timeout(12.0)

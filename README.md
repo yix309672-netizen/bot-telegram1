@@ -4,9 +4,8 @@
 
 | 服务         | 端口     | 说明                          |
 |------------|--------|-----------------------------|
-| backend    | 8000   | Python FastAPI 主接口（号码/短信/备份/登录） |
-| converter  | 8002   | 会话转换服务（session 转 tdata，供机器人调用） |
-| bot        | -      | Telegram 机器人（长轮询）               |
+| backend    | 8000   | Python FastAPI 统一后端（号码/短信/备份/登录/展示页/会话转换） |
+| bot        | -      | Telegram 机器人（长轮询，经统一后端转 tdata）               |
 | db (MySQL) | 3306   | 数据库（连不上自动回退本地 SQLite）            |
 | redis      | 6379   | 缓存（连不上自动降级内存）                 |
 | nginx      | 80/443 | 反向代理                        |
@@ -19,9 +18,9 @@
 │   ├── bot.py           # 主机器人逻辑（长轮询，会话登录，备份转换，lib缺失自动降级）
 │   ├── Dockerfile
 │   └── requirements.txt
-├── backend/             # FastAPI 后端
-│   ├── main_api.py      # 主接口（端口8000：号码/短信/备份/登录/JWT/CORS/限流/审计）
-│   ├── main_web.py      # 展示页+转换服务（端口8002：/to-tdata）
+├── backend/             # FastAPI 统一后端（单端口8000）
+│   ├── main_api.py      # 统一入口（业务接口/管理页/展示页/转换/登录/JWT/CORS/限流/审计）
+│   ├── display_pages.py # 展示页模板（号码/短信/备份）
 │   ├── dialaxy.py       # 自动化号码采集（无头+回写主接口）
 │   ├── core/            # 核心层：database/SQLAlchemy / jwt_manager / cache/Redis / crypto / security
 │   ├── config/          # 配置层：security.py 安全配置
@@ -73,7 +72,7 @@ pip install -r requirements.txt
 # 启动主接口
 uvicorn backend.main_api:app --reload --port 8000
 
-# 启动转换服务（新开终端）
+# 启动统一后端（含展示页与转换服务）
 python scripts/start_converter.py
 
 # 启动机器人（新开终端）
@@ -86,7 +85,7 @@ python scripts/test_api.py
 ### 4. Docker 部署
 
 ```bash
-# 启动所有服务（含 converter）
+# 启动所有服务
 docker-compose up -d
 
 # 查看日志
@@ -124,12 +123,20 @@ docker-compose down
 | POST | /api/backup/import      | 导入备份文件 |
 | POST | /api/backup/import_json | JSON 导入备份 |
 
-### 转换服务（8002）
+### 转换接口（统一后端8000，同源）
 
 | 方法 | 路径       | 说明              |
 |----|----------|-----------------|
 | GET | /health  | 健康检查            |
 | POST | /to-tdata | session 转 tdata（需 opentele） |
+
+### 展示页（统一后端8000）
+
+| 页面 | 路径（登录态/公开别名） |
+|----|------------------|
+| 号码管理 | /admin/phones · /phones |
+| 短信记录 | /admin/sms · /sms |
+| 备份管理 | /admin/backups · /backups |
 
 ## 生产安全配置
 

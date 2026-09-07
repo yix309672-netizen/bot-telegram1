@@ -6,7 +6,7 @@ import logging
 import hashlib
 import secrets
 import subprocess
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +23,7 @@ if __package__ in (None, ""):
     from core.cache import cache
     from core.security import SecurityUtils
     from core.crypto import PasswordManager
+    from display_pages import html_phones, html_sms, render_backups_page
 else:
     # 包方式运行（pytest / uvicorn backend.main_api:app）
     from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal
@@ -30,6 +31,7 @@ else:
     from .core.cache import cache
     from .core.security import SecurityUtils
     from .core.crypto import PasswordManager
+    from .display_pages import html_phones, html_sms, render_backups_page
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -335,6 +337,7 @@ HTML_TEMPLATE = """
     <a href="/admin/">📊 首页</a>
     <a href="/admin/phones">📱 号码管理</a>
     <a href="/admin/sms">💬 短信记录</a>
+    <a href="/admin/backups">📦 备份管理</a>
     <a href="/admin/logout" style="margin-left:auto">🚪 退出</a>
   </nav>
   {% endif %}
@@ -377,45 +380,12 @@ ADMIN_HOME = HTML_TEMPLATE.replace("{% block content %}{% endblock %}", """
   <h2>快速操作</h2>
   <a href="/admin/phones" class="btn">📱 号码管理</a>
   <a href="/admin/sms" class="btn">💬 短信记录</a>
+  <a href="/admin/backups" class="btn">📦 备份管理</a>
   <button class="btn" onclick="fetch('/api/phone/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:1})}).then(r=>r.json()).then(d=>alert('生成成功：'+(d.data[0]?d.data[0].number:'')))">🔧 测试生成</button>
 </div>
 """)
 
-PHONES_PAGE = HTML_TEMPLATE.replace("{% block content %}{% endblock %}", """
-<div class="card">
-  <h2>📱 号码管理</h2>
-  <div style="margin-bottom:15px">
-    <button class="btn" onclick="generatePhones()">➕ 生成号码</button>
-    <button class="btn" onclick="location.reload()">🔄 刷新</button>
-  </div>
-  <table>
-    <thead><tr><th>ID</th><th>号码</th><th>地区</th><th>状态</th></tr></thead>
-    <tbody id="tbody"></tbody>
-  </table>
-</div>
-<script>
-function loadPhones(){fetch('/api/phone/list').then(r=>r.json()).then(d=>{
-  document.getElementById('tbody').innerHTML=d.data.map(p=>`<tr><td>${p.id}</td><td>${p.number}</td><td>${p.country||'HK'}</td><td>${p.status}</td></tr>`).join('')||'<tr><td colspan="4">暂无数据</td></tr>'
-})}
-function generatePhones(){fetch('/api/phone/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:10})}).then(r=>r.json()).then(d=>{alert('生成成功');loadPhones()})}
-loadPhones();
-</script>
-""")
-
-SMS_PAGE = HTML_TEMPLATE.replace("{% block content %}{% endblock %}", """
-<div class="card">
-  <h2>💬 短信记录</h2>
-  <table>
-    <thead><tr><th>ID</th><th>手机号</th><th>内容</th><th>发送者</th><th>状态</th></tr></thead>
-    <tbody id="tbody"></tbody>
-  </table>
-</div>
-<script>
-fetch('/api/sms/list').then(r=>r.json()).then(d=>{
-  document.getElementById('tbody').innerHTML=d.data.map(s=>`<tr><td>${s.id}</td><td>${s.phone}</td><td>${s.content}</td><td>${s.sender}</td><td>${s.status}</td></tr>`).join('')||'<tr><td colspan="5">暂无数据</td></tr>'
-});
-</script>
-""")
+# 展示页模板已抽取到 display_pages.py（原8002富版本，R1并入统一后端）
 
 @app.get('/health', include_in_schema=False)
 def health():
@@ -494,14 +464,78 @@ def admin_home(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse(ADMIN_HOME.replace('{{phone_count}}', str(phone_count)).replace('{{sms_count}}', str(sms_count)))
 
 @app.get('/admin/phones', response_class=HTMLResponse)
+@app.get('/phones', response_class=HTMLResponse)
 def admin_phones(request: Request):
-    require_login(request)
-    return HTMLResponse(PHONES_PAGE)
+    # /admin/* 需登录；/phones 别名保持原8002公开行为
+    if request.url.path.startswith('/admin'):
+        require_login(request)
+    return HTMLResponse(html_phones)
 
 @app.get('/admin/sms', response_class=HTMLResponse)
+@app.get('/sms', response_class=HTMLResponse)
 def admin_sms(request: Request):
-    require_login(request)
-    return HTMLResponse(SMS_PAGE)
+    if request.url.path.startswith('/admin'):
+        require_login(request)
+    return HTMLResponse(html_sms)
+
+
+def _list_backup_files():
+    # 备份目录真实文件列表（过滤隐藏与密钥文件）
+    items = []
+    try:
+        for name in sorted(os.listdir(BACKUP_DIR)):
+            if name.startswith('.'):
+                continue
+            p = os.path.join(BACKUP_DIR, name)
+            if not os.path.isfile(p):
+                continue
+            st = os.stat(p)
+            size = st.st_size
+            size_str = f"{size / 1024:.1f}KB" if size < 1024 * 1024 else f"{size / 1024 / 1024:.1f}MB"
+            items.append((name, size_str, datetime.fromtimestamp(st.st_mtime).strftime('%Y-%m-%d %H:%M')))
+    except Exception as e:
+        logger.warning(f"读取备份目录失败: {e}")
+    return items
+
+
+@app.get('/admin/backups', response_class=HTMLResponse)
+@app.get('/backups', response_class=HTMLResponse)
+def admin_backups(request: Request):
+    if request.url.path.startswith('/admin'):
+        require_login(request)
+    return HTMLResponse(render_backups_page(_list_backup_files()))
+
+
+class ToTdataBackup(BaseModel):
+    data: str = ""
+    format: str = "telethon_session"
+
+
+class ToTdataRequest(BaseModel):
+    backup: ToTdataBackup = ToTdataBackup()
+    options: dict = {}
+
+
+@app.post('/to-tdata')
+async def to_tdata(payload: ToTdataRequest):
+    # 会话转换（原8002转换服务，R1并入统一后端；机器人经 CONVERTER_URL 调用）
+    session_str = (payload.backup.data or "").strip()
+    if not session_str:
+        return {"error": "empty_session", "detail": "缺少 session 字符串"}
+    try:
+        from opentele.td import TDesktop
+        from opentele.tl import TelegramClient as TelethonToDesktop
+        from opentele.api import API, UseCurrentSession
+        api = API.TelegramDesktop.Generate()
+        client = TelethonToDesktop(session_str, api=api)
+        await client.ToTDesktop(flag=UseCurrentSession)
+        return {"status": "ok", "format": "tdata", "detail": "转换成功"}
+    except ImportError:
+        logger.warning("opentele 未安装，转换请求已受理但未执行")
+        return {"status": "queued", "format": "tdata", "detail": "opentele 未安装，需 pip install opentele 后重试"}
+    except Exception as e:
+        logger.error(f"转换失败: {e}")
+        return {"error": "convert_failed", "detail": str(e)}
 
 @app.post('/api/backup/import')
 async def import_backup(file: UploadFile = File(...), _: bool = Depends(verify_api_key)):

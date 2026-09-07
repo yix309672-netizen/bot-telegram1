@@ -6,7 +6,7 @@ import os
 import urllib.request
 
 API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
-CONVERTER_URL = os.getenv("CONVERTER_URL", "http://localhost:8002").rstrip("/")
+CONVERTER_URL = os.getenv("CONVERTER_URL", "http://localhost:8000").rstrip("/")
 API_KEY = os.getenv("API_KEY", "")
 
 
