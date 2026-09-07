@@ -146,6 +146,62 @@ html_console = """<!DOCTYPE html>
 <p id="conv-result" class="font-mono text-xs text-gray-400 mt-2 break-all"></p>
 </div>
 </div>
+<!-- 管理功能区（原PHP后台迁移） -->
+<h3 class="text-sm font-semibold mb-3 text-gray-300">管理功能（需管理员登录）</h3>
+<div class="grid grid-cols-3 gap-4 mb-4">
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+<h4 class="text-sm font-semibold mb-3">系统配置</h4>
+<div id="cfg-list" class="font-mono text-xs text-gray-400 mb-2 max-h-32 overflow-y-auto"></div>
+<input id="cfg-key" class="op-input mb-2" placeholder="键">
+<input id="cfg-value" class="op-input mb-2" placeholder="值">
+<div class="flex gap-2"><button onclick="cfgSave()" class="op-btn">保存</button><button onclick="cfgLoad()" class="op-btn gray">刷新</button></div>
+</div>
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+<h4 class="text-sm font-semibold mb-3">文件上传</h4>
+<input id="up-file" type="file" class="op-input mb-2">
+<button onclick="upGo()" class="op-btn">上传</button>
+<div id="up-list" class="font-mono text-xs text-gray-400 mt-2 max-h-32 overflow-y-auto"></div>
+</div>
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+<h4 class="text-sm font-semibold mb-3">机器人TOKEN</h4>
+<p class="font-mono text-xs text-gray-400 mb-2">当前: <span id="token-masked">--</span></p>
+<input id="token-input" type="password" class="op-input mb-2" placeholder="新TOKEN">
+<div class="flex gap-2"><button onclick="tokenSave()" class="op-btn">保存</button><button onclick="tokenTest()" class="op-btn gray">测试链接</button></div>
+<p id="token-result" class="font-mono text-xs text-gray-400 mt-2 break-all"></p>
+</div>
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+<h4 class="text-sm font-semibold mb-3">账号管理</h4>
+<div id="user-list" class="font-mono text-xs text-gray-400 mb-2 max-h-32 overflow-y-auto"></div>
+<input id="user-name" class="op-input mb-2" placeholder="用户名">
+<input id="user-pass" type="password" class="op-input mb-2" placeholder="密码（≥6位）">
+<div class="flex gap-2"><button onclick="userAdd('operator')" class="op-btn">建操作员</button><button onclick="userAdd('admin')" class="op-btn warn">建管理员</button></div>
+</div>
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+<h4 class="text-sm font-semibold mb-3">备份文件</h4>
+<div id="bak-list" class="font-mono text-xs text-gray-400 mb-2 max-h-32 overflow-y-auto"></div>
+<button onclick="bakLoad()" class="op-btn gray">刷新</button>
+</div>
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+<h4 class="text-sm font-semibold mb-3">机器人日志</h4>
+<pre id="bot-log" class="font-mono text-xs text-gray-400 bg-gray-950 p-2 rounded max-h-40 overflow-y-auto">--</pre>
+<button onclick="botLogLoad()" class="op-btn gray mt-2">刷新</button>
+</div>
+</div>
+<div class="grid grid-cols-3 gap-4 mb-4">
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800 col-span-2">
+<h4 class="text-sm font-semibold mb-3">操作审计（最近20条）</h4>
+<div id="audit-list" class="font-mono text-xs text-gray-400 max-h-40 overflow-y-auto"></div>
+<button onclick="auditLoad()" class="op-btn gray mt-2">刷新</button>
+</div>
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+<h4 class="text-sm font-semibold mb-3">商城（分类/商品）</h4>
+<div class="flex gap-2 mb-2"><input id="cate-title" class="op-input" placeholder="新分类名"><button onclick="cateAdd()" class="op-btn">加分类</button></div>
+<div id="cate-list" class="font-mono text-xs text-gray-400 mb-2 max-h-24 overflow-y-auto"></div>
+<div class="flex gap-2 mb-2"><input id="goods-title" class="op-input" placeholder="商品名"><input id="goods-price" type="number" step="0.01" class="op-input" placeholder="价格"></div>
+<button onclick="goodsAdd()" class="op-btn">加商品</button>
+<div id="goods-list" class="font-mono text-xs text-gray-400 mt-2 max-h-24 overflow-y-auto"></div>
+</div>
+</div>
 </div>
 <footer class="bg-gray-900 border-t border-gray-800 px-4 py-3 flex justify-between items-center">
 <span class="text-gray-600 text-xs">UI style adapted from joshhu/uitest #31 Real-time Monitoring (MIT)</span>
@@ -242,8 +298,118 @@ async function opConvert(){
   const r = await jpost('/to-tdata', {backup:{data:document.getElementById('conv-session').value, format:'telethon_session'}, options:{}});
   document.getElementById('conv-result').textContent = JSON.stringify(r.data).slice(0, 200);
 }
+async function cfgLoad(){
+  const r = await jget('/api/system/config');
+  document.getElementById('cfg-list').innerHTML = (r.data||[]).map(c=>'<div>'+c.key+' = '+(c.value||'').slice(0,40)+'</div>').join('') || '暂无配置（需登录）';
+}
+async function cfgSave(){
+  const key = document.getElementById('cfg-key').value.trim();
+  const value = document.getElementById('cfg-value').value;
+  const resp = await fetch('/api/system/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key, value})});
+  const d = await resp.json();
+  alert(d.message || d.detail || JSON.stringify(d));
+  cfgLoad(); refreshAll();
+}
+async function upGo(){
+  const f = document.getElementById('up-file').files[0];
+  if (!f) { alert('请选择文件'); return; }
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/api/upload', {method:'POST', body:fd});
+  const d = await r.json();
+  alert(d.message || d.detail || JSON.stringify(d));
+  upLoad(); refreshAll();
+}
+async function upLoad(){
+  const r = await jget('/api/upload/list?limit=20');
+  document.getElementById('up-list').innerHTML = (r.data||[]).map(x=>'<div>'+x.filename+' ('+x.size+'B)</div>').join('') || '暂无';
+}
+async function tokenLoad(){
+  const r = await fetch('/api/bot/token'); const d = await r.json();
+  document.getElementById('token-masked').textContent = d.masked || d.detail || '--';
+}
+async function tokenSave(){
+  const token = document.getElementById('token-input').value.trim();
+  const r = await fetch('/api/bot/token', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token})});
+  const d = await r.json();
+  document.getElementById('token-result').textContent = d.message || d.detail || JSON.stringify(d);
+  tokenLoad();
+}
+async function tokenTest(){
+  const token = document.getElementById('token-input').value.trim();
+  const r = await jpost('/api/bot/token/test', {token});
+  document.getElementById('token-result').textContent = r.status===200 ? ('连通: '+r.data.username) : ('失败: '+JSON.stringify(r.data));
+}
+async function userLoad(){
+  const r = await fetch('/api/users'); const d = await r.json();
+  if (!d.data) { document.getElementById('user-list').innerHTML = '需管理员登录'; return; }
+  document.getElementById('user-list').innerHTML = d.data.map(u =>
+    '<div>'+u.username+' ['+u.role+'] '+(u.status?'启用':'禁用')+
+    ' <a href="javascript:userToggle('+u.id+','+(u.status?0:1)+')" class="text-blue-400">启/禁</a>'+
+    ' <a href="javascript:userPwd('+u.id+')" class="text-yellow-400">改密</a></div>').join('') || '暂无';
+}
+async function userAdd(role){
+  const username = document.getElementById('user-name').value.trim();
+  const password = document.getElementById('user-pass').value;
+  const r = await jpost('/api/users', {username, password, role});
+  alert(r.data.message || r.data.detail || JSON.stringify(r.data));
+  userLoad();
+}
+async function userToggle(id, status){
+  const r = await fetch('/api/users/'+id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status})});
+  alert((await r.json()).message || '完成'); userLoad();
+}
+async function userPwd(id){
+  const password = prompt('输入新密码（≥6位）:');
+  if (!password) return;
+  const r = await fetch('/api/users/'+id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password})});
+  alert((await r.json()).message || '完成');
+}
+async function bakLoad(){
+  document.getElementById('bak-list').innerHTML = '备份目录文件请见 <a href="/admin/backups" class="text-blue-400">备份管理页</a>（支持删除）';
+}
+async function botLogLoad(){
+  const r = await fetch('/api/bot/log?num=50'); const d = await r.json();
+  document.getElementById('bot-log').textContent = d.log || JSON.stringify(d);
+}
+async function auditLoad(){
+  const r = await jget('/api/audit/logs?limit=20');
+  if (!r.data) { document.getElementById('audit-list').innerHTML = '需登录查看'; return; }
+  document.getElementById('audit-list').innerHTML = r.data.map(a =>
+    '<div>['+a.method+'] '+a.path+' → '+a.status+' <span class="text-gray-600">'+a.username+' '+a.ip+'</span></div>').join('') || '暂无';
+}
+async function mallLoad(){
+  const c = await jget('/api/mall/cate');
+  document.getElementById('cate-list').innerHTML = (c.data||[]).map(x =>
+    '<div>['+x.id+'] '+x.title+' <a href="javascript:cateDel('+x.id+')" class="text-red-400">删</a></div>').join('') || '暂无';
+  const g = await jget('/api/mall/goods');
+  document.getElementById('goods-list').innerHTML = (g.data||[]).map(x =>
+    '<div>['+x.id+'] '+x.title+' ¥'+x.price+' x'+x.stock+' <a href="javascript:goodsDel('+x.id+')" class="text-red-400">删</a></div>').join('') || '暂无';
+}
+async function cateAdd(){
+  const title = document.getElementById('cate-title').value.trim();
+  if (!title) return;
+  const r = await jpost('/api/mall/cate', {title});
+  alert(r.data.message || r.data.detail || JSON.stringify(r.data)); mallLoad();
+}
+async function cateDel(id){
+  if (!confirm('删除分类 '+id+'？')) return;
+  await fetch('/api/mall/cate/'+id, {method:'DELETE'}); mallLoad();
+}
+async function goodsAdd(){
+  const title = document.getElementById('goods-title').value.trim();
+  const price = parseFloat(document.getElementById('goods-price').value) || 0;
+  if (!title) return;
+  const r = await jpost('/api/mall/goods', {title, price});
+  alert(r.data.message || r.data.detail || JSON.stringify(r.data)); mallLoad();
+}
+async function goodsDel(id){
+  if (!confirm('删除商品 '+id+'？')) return;
+  await fetch('/api/mall/goods/'+id, {method:'DELETE'}); mallLoad();
+}
+function mgmtRefresh(){ cfgLoad(); upLoad(); tokenLoad(); userLoad(); botLogLoad(); auditLoad(); mallLoad(); document.getElementById('bak-list').innerHTML = '备份目录文件请见 <a href="/admin/backups" class="text-blue-400">备份管理页</a>'; }
 refreshAll();
 setInterval(refreshAll, 3000);
+mgmtRefresh();
 </script>
 </body>
 </html>"""

@@ -143,6 +143,27 @@ docker-compose down
 3 秒轮询，外加生成/验证/导入/短信/机器人启停/转换测试六组快捷操作。
 聚合接口：`/api/metrics/overview` `/api/metrics/recent` `/api/system/status`（公开只读）。
 
+## R2：PHP后台已迁移（admin/ 退役）
+
+原 ThinkPHP 后台全部功能已搬入统一后端，对照表：
+
+| PHP 模块 | Python 替代 |
+|---|---|
+| strategy.phone（号码增删改查/生成/导入） | /api/phone/*（generate/validate/import/list/PUT改状态/DELETE） |
+| strategy.sms（短信群发/记录） | /api/sms/send + /api/sms/list |
+| strategy.backup（备份上传/列表） | /api/backup/import(+文件列表页/DELETE删文件） |
+| strategy.bot（启停/日志） | /api/bot/start|stop|status|log |
+| system.bot_config（TOKEN） | /api/bot/token（查看脱敏/保存/测试getMe） |
+| system.config（站点配置） | /api/system/config（键值增改查） |
+| system.uploadfile（附件） | /api/upload（100MB内）+ /api/upload/list |
+| system.log（操作日志） | audit_logs 表 + /api/audit/logs |
+| system.admin/auth（账号角色） | admin_users 表 + /api/users（admin/operator 双角色） |
+| mall.cate/goods（商城示例） | /api/mall/cate + /api/mall/goods |
+
+角色说明：`admin` 全权，`operator` 只读与非破坏操作（删除/启停/密钥/账号管理仅 admin）。
+数据迁移：`python scripts/migrate_php.py`（需 MySQL 在线，幂等可重跑；PHP 密码哈希不可复用，迁入账号需重置密码）。
+PHP 目录保留归档不再启动；vendor 下的 PHP8.1 补丁仅具历史意义。
+
 ## 生产安全配置
 
 ```bash

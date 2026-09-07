@@ -6,7 +6,7 @@ import logging
 import os
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text, Boolean, Integer, create_engine
+from sqlalchemy import DateTime, Float, String, Text, Boolean, Integer, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,66 @@ class AuditLog(Base):
     method: Mapped[str] = mapped_column(String(10), default="")
     path: Mapped[str] = mapped_column(String(255), default="")
     status_code: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SystemConfig(Base):
+    # 系统配置表（原PHP system.config：站点/上传等键值）
+    __tablename__ = "system_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    remark: Mapped[str] = mapped_column(String(255), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class UploadFile(Base):
+    # 上传文件记录表（原PHP system.uploadfile）
+    __tablename__ = "upload_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    path: Mapped[str] = mapped_column(String(500))
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    uploader: Mapped[str] = mapped_column(String(50), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AdminUser(Base):
+    # 后台账号表（原PHP system.admin，多账号+角色）
+    __tablename__ = "admin_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default="operator")
+    status: Mapped[int] = mapped_column(Integer, default=1)
+    login_num: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MallCate(Base):
+    # 商城分类表（原PHP mall.cate）
+    __tablename__ = "mall_cate"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(50), unique=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MallGoods(Base):
+    # 商城商品表（原PHP mall.goods）
+    __tablename__ = "mall_goods"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cate_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    title: Mapped[str] = mapped_column(String(100))
+    price: Mapped[float] = mapped_column(default=0.0)
+    stock: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

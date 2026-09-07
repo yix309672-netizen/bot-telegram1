@@ -1,6 +1,7 @@
 # coding=utf-8
 import json
 import os
+import re
 import sys
 import logging
 import hashlib
@@ -17,10 +18,12 @@ from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+import httpx
 
 if __package__ in (None, ""):
     # 目录方式运行（Docker WORKDIR /app 内 uvicorn main_api:app）
     from core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
+    from core.database import SystemConfig, UploadFile as UploadFileRecord, AdminUser, MallCate, MallGoods
     from core.jwt_manager import JWTManager
     from core.cache import cache, is_redis_live
     from core.security import SecurityUtils
@@ -30,6 +33,7 @@ if __package__ in (None, ""):
 else:
     # 包方式运行（pytest / uvicorn backend.main_api:app）
     from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
+    from .core.database import SystemConfig, UploadFile as UploadFileRecord, AdminUser, MallCate, MallGoods
     from .core.jwt_manager import JWTManager
     from .core.cache import cache, is_redis_live
     from .core.security import SecurityUtils
@@ -270,7 +274,8 @@ def get_session(request: Request):
         payload = jwt_manager.verify_token(token)
         if payload.get("type") != "access":
             return None
-        return {"user_id": payload.get("sub"), "username": payload.get("username")}
+        return {"user_id": payload.get("sub"), "username": payload.get("username"),
+                "role": payload.get("role", "operator")}
     except Exception:
         return None
 
@@ -279,6 +284,29 @@ def require_login(request: Request):
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return session
+
+
+def require_admin(request: Request):
+    # 管理员角色校验（operator 只读与非破坏操作，删除/启停/密钥/账号等仅 admin）
+    session = require_login(request)
+    if session.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return session
+
+
+def require_admin_or_key(request: Request, x_api_key: Optional[str] = Header(None)):
+    # 破坏性操作：API Key 或管理员登录态任一通过（鉴权关闭时全放行）
+    if not ENABLE_AUTH:
+        return True
+    if API_KEY and x_api_key == API_KEY:
+        return {"username": "api-key", "role": "admin"}
+    session = get_session(request)
+    if session and session.get("role") == "admin":
+        return session
+    if not API_KEY:
+        logger.warning("API_KEY未配置，已禁用认证")
+        return True
+    raise HTTPException(status_code=403, detail="需要管理员权限")
 
 
 def _db_counts(db: Session):
@@ -488,6 +516,14 @@ def api_root():    return {
             '/api/metrics/overview',
             '/api/metrics/recent',
             '/api/system/status',
+            '/api/system/config',
+            '/api/upload',
+            '/api/audit/logs',
+            '/api/bot/log',
+            '/api/bot/token',
+            '/api/users',
+            '/api/mall/cate',
+            '/api/mall/goods',
             '/to-tdata',
             '/console',
             '/admin/console',
@@ -515,9 +551,24 @@ async def login(request: Request, username: str = Form(default=""), password: st
     client_ip = SecurityUtils.get_client_ip(request)
     if _is_login_locked(client_ip):
         return HTMLResponse(LOGIN_PAGE + "<script>alert('失败次数过多，已锁定15分钟')</script>")
-    if username == ADMIN_USERNAME and _verify_admin_password(password):
+    authed = None  # (user_id, username, role)
+    # 方式一：数据库账号（argon2，多账号多角色）
+    if username:
+        db_user = db.query(AdminUser).filter(AdminUser.username == username).first()
+        if db_user and db_user.status == 1:
+            try:
+                if PasswordManager.verify_password(password, db_user.password_hash):
+                    db_user.login_num += 1
+                    db.commit()
+                    authed = (db_user.id, db_user.username, db_user.role or "operator")
+            except Exception:
+                db.rollback()
+    # 方式二：环境变量超级管理员（回退）
+    if not authed and username == ADMIN_USERNAME and _verify_admin_password(password):
+        authed = (1, ADMIN_USERNAME, "admin")
+    if authed:
         _clear_login_fail(client_ip)
-        token = jwt_manager.create_access_token(user_id=1, username=ADMIN_USERNAME, role="admin", expires_delta=timedelta(hours=12))
+        token = jwt_manager.create_access_token(user_id=authed[0], username=authed[1], role=authed[2], expires_delta=timedelta(hours=12))
         phone_count, sms_count = _db_counts(db)
         response = HTMLResponse(ADMIN_HOME.replace('{{phone_count}}', str(phone_count)).replace('{{sms_count}}', str(sms_count)))
         response.set_cookie('access_token', token, httponly=True, max_age=12 * 3600)
@@ -738,7 +789,7 @@ def list_phones(status: Optional[str] = None, limit: int = 200, offset: int = 0,
 
 
 @app.delete('/api/phone/{phone_id}')
-def delete_phone(phone_id: int, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+def delete_phone(phone_id: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
     # 按ID删除号码（供管理页删除按钮使用）
     row = db.query(PhoneNumber).filter(PhoneNumber.id == phone_id).first()
     if not row:
@@ -792,7 +843,7 @@ def get_bot_status():
     return {'status': 'running' if is_running else 'stopped'}
 
 @app.post('/api/bot/start')
-def start_bot():
+def start_bot(_: bool = Depends(require_admin_or_key)):
     global bot_process
     if bot_process is not None and bot_process.poll() is None:
         return {'message': 'Bot is already running', 'status': 'running'}
@@ -823,7 +874,7 @@ def start_bot():
         return {'message': f'Failed to start bot: {str(e)}', 'status': 'error'}
 
 @app.post('/api/bot/stop')
-def stop_bot():
+def stop_bot(_: bool = Depends(require_admin_or_key)):
     global bot_process
     if bot_process is None or bot_process.poll() is not None:
         return {'message': 'Bot is not running', 'status': 'stopped'}
@@ -837,6 +888,361 @@ def stop_bot():
         if bot_process:
             bot_process.kill()
         return {'message': 'Bot stopped forcefully', 'status': 'stopped'}
+
+# ================= R2：PHP后台迁移接口（配置/上传/审计/机器人/账号/商城） =================
+
+class ConfigItem(BaseModel):
+    key: str
+    value: str = ""
+    remark: str = ""
+
+
+@app.get('/api/system/config')
+def get_config(db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    rows = db.query(SystemConfig).order_by(SystemConfig.key).all()
+    return {'data': [{'key': r.key, 'value': r.value, 'remark': r.remark} for r in rows]}
+
+
+@app.put('/api/system/config')
+def put_config(item: ConfigItem, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    key = item.key.strip()
+    if not key or len(key) > 100:
+        raise HTTPException(status_code=422, detail="配置键非法")
+    row = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+    if row:
+        row.value, row.remark = item.value, item.remark
+    else:
+        db.add(SystemConfig(key=key, value=item.value, remark=item.remark))
+    db.commit()
+    return {'message': '保存成功', 'key': key}
+
+
+UPLOAD_DIR = os.path.join(BACKUP_DIR, 'uploads')
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+
+@app.post('/api/upload')
+async def upload_file(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db),
+                      _who: bool = Depends(require_admin_or_key)):
+    filename = _safe_backup_filename(file.filename)
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="文件超限（最大100MB）")
+    path = os.path.join(UPLOAD_DIR, filename)
+    with open(path, 'wb') as f:
+        f.write(content)
+    session = get_session(request)
+    row = UploadFileRecord(filename=filename, path=path, size=len(content),
+                           uploader=(session or {}).get("username", "api-key"))
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {'message': '上传成功', 'id': row.id, 'filename': filename, 'size': len(content)}
+
+
+@app.get('/api/upload/list')
+def list_uploads(limit: int = 100, offset: int = 0, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    q = db.query(UploadFileRecord).order_by(UploadFileRecord.id.desc())
+    total = q.count()
+    rows = q.offset(max(offset, 0)).limit(min(max(limit, 1), 500)).all()
+    return {'data': [{'id': r.id, 'filename': r.filename, 'size': r.size,
+                      'uploader': r.uploader} for r in rows], 'total': total}
+
+
+@app.get('/api/audit/logs')
+def audit_logs(limit: int = 100, offset: int = 0, request: Request = None, db: Session = Depends(get_db),
+               _: dict = Depends(require_login)):
+    q = db.query(AuditLog).order_by(AuditLog.id.desc())
+    total = q.count()
+    rows = q.offset(max(offset, 0)).limit(min(max(limit, 1), 500)).all()
+    return {'data': [{'id': r.id, 'username': r.username, 'ip': r.ip, 'method': r.method,
+                      'path': r.path, 'status': r.status_code} for r in rows], 'total': total}
+
+
+def _bot_dir() -> str:
+    # 机器人目录定位（与启动逻辑同源）
+    env_dir = os.getenv("BOT_WORKDIR", "")
+    if env_dir and os.path.isdir(env_dir):
+        return env_dir
+    here = os.path.dirname(os.path.abspath(__file__))
+    for c in (os.path.join(here, "..", "bot"), os.path.join(os.getcwd(), "bot")):
+        if os.path.isdir(c):
+            return os.path.normpath(c)
+    return ""
+
+
+@app.get('/api/bot/log')
+def bot_log(num: int = 200, request: Request = None, _: dict = Depends(require_login)):
+    num = min(max(num, 1), 2000)
+    content = []
+    d = _bot_dir()
+    for name in ("bot.log", "bot-err.log"):
+        p = os.path.join(d, name) if d else ""
+        if p and os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    content.extend(f.readlines()[-num:])
+            except Exception:
+                pass
+    if not content:
+        return {'log': '（暂无日志，Bot 尚未启动过）'}
+    return {'log': "".join(content[-num:])}
+
+
+def _bot_env_file() -> str:
+    d = _bot_dir()
+    return os.path.join(d, ".env") if d else ""
+
+
+def _read_bot_token() -> str:
+    env_file = _bot_env_file()
+    if not env_file or not os.path.isfile(env_file):
+        return ""
+    for line in open(env_file, encoding="utf-8", errors="replace"):
+        line = line.strip()
+        if line.startswith("BOT_TOKEN="):
+            return line[len("BOT_TOKEN="):].strip()
+    return ""
+
+
+def _mask_token(token: str) -> str:
+    if not token:
+        return "（未配置）"
+    if len(token) <= 12:
+        return token[:3] + "****"
+    return token[:4] + "****" + token[-4:] + f"（共{len(token)}位）"
+
+
+@app.get('/api/bot/token')
+def bot_token_info(request: Request = None, _: bool = Depends(require_admin_or_key)):
+    token = _read_bot_token()
+    return {'configured': token != '', 'masked': _mask_token(token), 'length': len(token),
+            'env_exists': bool(_bot_env_file() and os.path.isfile(_bot_env_file()))}
+
+
+class TokenSave(BaseModel):
+    token: str
+
+
+class TokenTest(BaseModel):
+    token: str = ""
+
+
+@app.put('/api/bot/token')
+def bot_token_save(body: TokenSave, _: bool = Depends(require_admin_or_key)):
+    token = body.token.strip()
+    if not re.match(r'^\d+:[\w\-]{30,}$', token):
+        raise HTTPException(status_code=422, detail="TOKEN格式不正确（数字ID+冒号+密钥）")
+    env_file = _bot_env_file()
+    if not env_file:
+        raise HTTPException(status_code=500, detail="未找到机器人目录")
+    if os.path.isfile(env_file):
+        try:
+            import shutil
+            shutil.copy(env_file, env_file + ".bak")
+        except Exception:
+            pass
+        content = open(env_file, encoding="utf-8", errors="replace").read()
+        if re.search(r'^BOT_TOKEN=.*$', content, re.M):
+            content = re.sub(r'^BOT_TOKEN=.*$', f'BOT_TOKEN={token}', content, flags=re.M)
+        else:
+            content = content.rstrip("\n") + f"\nBOT_TOKEN={token}\n"
+    else:
+        content = f"BOT_TOKEN={token}\n"
+    with open(env_file, "w", encoding="utf-8") as f:
+        f.write(content)
+    return {'message': 'TOKEN已保存，重启Bot后生效'}
+
+
+@app.post('/api/bot/token/test')
+async def bot_token_test(body: TokenTest, _: bool = Depends(require_admin_or_key)):
+    token = body.token.strip() or _read_bot_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="未配置TOKEN")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+            data = resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"连接Telegram失败：{e}")
+    if not data.get("ok"):
+        raise HTTPException(status_code=422, detail=data.get("description", "TOKEN无效"))
+    r = data["result"]
+    return {'id': r.get("id"), 'username': "@" + r.get("username", ""),
+            'first_name': r.get("first_name", "")}
+
+
+@app.delete('/api/backup/{name}')
+def delete_backup(name: str, _: bool = Depends(require_admin_or_key)):
+    filename = _safe_backup_filename(name)
+    if filename.startswith(".") or filename.endswith(".db"):
+        raise HTTPException(status_code=400, detail="该文件不允许删除")
+    path = os.path.join(BACKUP_DIR, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    os.remove(path)
+    return {'message': '删除成功', 'filename': filename}
+
+
+class PhoneUpdate(BaseModel):
+    status: str
+
+
+@app.put('/api/phone/{phone_id}')
+def update_phone(phone_id: int, body: PhoneUpdate, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    if body.status not in ("generated", "valid", "invalid"):
+        raise HTTPException(status_code=422, detail="状态非法")
+    row = db.query(PhoneNumber).filter(PhoneNumber.id == phone_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="号码不存在")
+    row.status = body.status
+    row.is_valid = (body.status == "valid")
+    db.commit()
+    return {'message': '更新成功', 'id': phone_id, 'status': body.status}
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "operator"
+
+
+class UserUpdate(BaseModel):
+    password: str = None
+    role: str = None
+    status: int = None
+
+
+def _user_to_dict(u: AdminUser) -> dict:
+    return {"id": u.id, "username": u.username, "role": u.role,
+            "status": u.status, "login_num": u.login_num}
+
+
+@app.get('/api/users')
+def list_users(request: Request = None, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    rows = db.query(AdminUser).order_by(AdminUser.id).all()
+    return {'data': [_user_to_dict(u) for u in rows], 'env_admin': ADMIN_USERNAME}
+
+
+@app.post('/api/users')
+def create_user(body: UserCreate, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    username = body.username.strip()
+    if not username or len(username) > 50:
+        raise HTTPException(status_code=422, detail="用户名非法")
+    if not body.password or len(body.password) < 6:
+        raise HTTPException(status_code=422, detail="密码至少6位")
+    if body.role not in ("admin", "operator"):
+        raise HTTPException(status_code=422, detail="角色非法")
+    if username == ADMIN_USERNAME or db.query(AdminUser).filter(AdminUser.username == username).first():
+        raise HTTPException(status_code=409, detail="用户名已存在")
+    row = AdminUser(username=username, password_hash=PasswordManager.hash_password(body.password), role=body.role)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {'message': '创建成功', 'data': _user_to_dict(row)}
+
+
+@app.put('/api/users/{uid}')
+def update_user(uid: int, body: UserUpdate, request: Request, db: Session = Depends(get_db),
+                _: bool = Depends(require_admin_or_key)):
+    row = db.query(AdminUser).filter(AdminUser.id == uid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    me = (get_session(request) or {}).get("username", "")
+    if body.role is not None:
+        if body.role not in ("admin", "operator"):
+            raise HTTPException(status_code=422, detail="角色非法")
+        if row.username == me and body.role != "admin":
+            raise HTTPException(status_code=400, detail="不能降级自己的管理员权限")
+        row.role = body.role
+    if body.status is not None:
+        if body.status not in (0, 1):
+            raise HTTPException(status_code=422, detail="状态非法")
+        if row.username == me and body.status == 0:
+            raise HTTPException(status_code=400, detail="不能禁用自己")
+        row.status = body.status
+    if body.password:
+        if len(body.password) < 6:
+            raise HTTPException(status_code=422, detail="密码至少6位")
+        row.password_hash = PasswordManager.hash_password(body.password)
+    db.commit()
+    return {'message': '更新成功', 'data': _user_to_dict(row)}
+
+
+class CateIn(BaseModel):
+    title: str
+    sort: int = 0
+    status: int = 1
+
+
+class GoodsIn(BaseModel):
+    cate_id: int = 0
+    title: str
+    price: float = 0.0
+    stock: int = 0
+    status: int = 1
+
+
+@app.get('/api/mall/cate')
+def list_cate(db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    rows = db.query(MallCate).order_by(MallCate.sort, MallCate.id).all()
+    return {'data': [{'id': r.id, 'title': r.title, 'sort': r.sort, 'status': r.status} for r in rows]}
+
+
+@app.post('/api/mall/cate')
+def add_cate(body: CateIn, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    if not body.title.strip():
+        raise HTTPException(status_code=422, detail="分类名不能为空")
+    row = MallCate(title=body.title.strip(), sort=body.sort, status=body.status)
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="分类已存在")
+    db.refresh(row)
+    return {'message': '创建成功', 'id': row.id}
+
+
+@app.delete('/api/mall/cate/{cid}')
+def del_cate(cid: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(MallCate).filter(MallCate.id == cid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="分类不存在")
+    db.delete(row)
+    db.commit()
+    return {'message': '删除成功'}
+
+
+@app.get('/api/mall/goods')
+def list_goods(db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    rows = db.query(MallGoods).order_by(MallGoods.id.desc()).all()
+    return {'data': [{'id': r.id, 'cate_id': r.cate_id, 'title': r.title,
+                      'price': r.price, 'stock': r.stock, 'status': r.status} for r in rows]}
+
+
+@app.post('/api/mall/goods')
+def add_goods(body: GoodsIn, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    if not body.title.strip():
+        raise HTTPException(status_code=422, detail="商品名不能为空")
+    row = MallGoods(cate_id=body.cate_id, title=body.title.strip(),
+                    price=body.price, stock=body.stock, status=body.status)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {'message': '创建成功', 'id': row.id}
+
+
+@app.delete('/api/mall/goods/{gid}')
+def del_goods(gid: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(MallGoods).filter(MallGoods.id == gid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="商品不存在")
+    db.delete(row)
+    db.commit()
+    return {'message': '删除成功'}
+
 
 if __name__ == "__main__":
     import uvicorn
