@@ -84,6 +84,7 @@ html_phones = '''
 
     <script>
         const API_BASE = '';
+        // 本页弹窗是行内 display 样式，直接开关（首页的 class 方案在此页无样式，不可用）
         function openModal(id) { document.getElementById(id).style.display = 'flex'; }
         function closeModal(id) { document.getElementById(id).style.display = 'none'; }
         async function loadPhones() {
@@ -260,6 +261,7 @@ html_sms = '''
 
     <script>
         const API_BASE = '';
+        async function loadSMS() {
             try {
                 const res = await fetch(API_BASE + '/api/sms/list');
                 const data = await res.json();
