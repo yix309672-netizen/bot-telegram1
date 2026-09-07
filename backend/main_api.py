@@ -309,13 +309,6 @@ def require_admin_or_key(request: Request, x_api_key: Optional[str] = Header(Non
     raise HTTPException(status_code=403, detail="需要管理员权限")
 
 
-def _db_counts(db: Session):
-    # 后台首页统计走数据库实时查询
-    phone_count = db.query(PhoneNumber).count()
-    sms_count = db.query(SmsRecord).count()
-    return phone_count, sms_count
-
-
 def _phone_to_dict(p: PhoneNumber) -> dict:
     return {"id": p.id, "number": p.number, "country": p.country,
             "status": p.status, "is_valid": p.is_valid}
@@ -427,26 +420,57 @@ LOGIN_PAGE = HTML_TEMPLATE.replace("{% block content %}{% endblock %}", """
 </div>
 """).replace("{% block title %}TeleBot 管理后台{% endblock %}", "登录 - TeleBot")
 
-ADMIN_HOME = HTML_TEMPLATE.replace("{% block content %}{% endblock %}", """
-<div class="stats">
-  <div class="stat-card">
-    <div class="num">{{ phone_count }}</div>
-    <div>📱 号码总数</div>
+ADMIN_SHELL = """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>TeleBot 管理后台</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#111827;color:#e5e7eb;height:100vh;display:flex;flex-direction:column}
+    .topbar{background:#1f2937;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #374151}
+    .topbar h1{font-size:18px}
+    .topbar a{color:#9ca3af;text-decoration:none}
+    .topbar a:hover{color:#fff}
+    .wrap{flex:1;display:flex;min-height:0}
+    .sidebar{width:200px;background:#1f2937;border-right:1px solid #374151;padding:12px 0;flex-shrink:0}
+    .sidebar button{display:block;width:100%;text-align:left;background:none;border:none;color:#d1d5db;padding:12px 20px;font-size:14px;cursor:pointer;border-left:3px solid transparent}
+    .sidebar button:hover{background:#374151;color:#fff}
+    .sidebar button.active{background:#374151;color:#fff;border-left-color:#22c55e}
+    .content{flex:1;min-width:0}
+    .content iframe{width:100%;height:100%;border:none;background:#fff}
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>🤖 TeleBot 管理后台</h1>
+    <a href="/admin/logout">🚪 退出</a>
   </div>
-  <div class="stat-card">
-    <div class="num">{{ sms_count }}</div>
-    <div>💬 短信总数</div>
+  <div class="wrap">
+    <div class="sidebar">
+      <button data-src="/admin/console" class="active">📊 监控台</button>
+      <button data-src="/admin/phones">📱 号码管理</button>
+      <button data-src="/admin/sms">💬 短信记录</button>
+      <button data-src="/admin/backups">📦 备份管理</button>
+      <button data-src="/docs">📖 接口文档</button>
+    </div>
+    <div class="content">
+      <iframe id="mainframe" src="/admin/console"></iframe>
+    </div>
   </div>
-</div>
-<div class="card">
-  <h2>快速操作</h2>
-  <a href="/admin/phones" class="btn">📱 号码管理</a>
-  <a href="/admin/sms" class="btn">💬 短信记录</a>
-  <a href="/admin/backups" class="btn">📦 备份管理</a>
-  <a href="/admin/console" class="btn">📊 实时监控台</a>
-  <button class="btn" onclick="fetch('/api/phone/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:1})}).then(r=>r.json()).then(d=>alert('生成成功：'+(d.data[0]?d.data[0].number:'')))">🔧 测试生成</button>
-</div>
-""")
+<script>
+document.querySelectorAll('.sidebar button').forEach(function(b){
+  b.addEventListener('click', function(){
+    document.querySelectorAll('.sidebar button').forEach(function(x){x.classList.remove('active')});
+    b.classList.add('active');
+    document.getElementById('mainframe').src = b.getAttribute('data-src');
+  });
+});
+</script>
+</body>
+</html>
+"""
 
 # 展示页模板已抽取到 display_pages.py（原8002富版本，R1并入统一后端）
 
@@ -543,8 +567,7 @@ def api_root():    return {
 def login_page(request: Request, db: Session = Depends(get_db)):
     session = get_session(request)
     if session:
-        phone_count, sms_count = _db_counts(db)
-        return HTMLResponse(ADMIN_HOME.replace('{{phone_count}}', str(phone_count)).replace('{{sms_count}}', str(sms_count)))
+        return HTMLResponse(ADMIN_SHELL)
     return HTMLResponse(LOGIN_PAGE)
 
 @app.post('/admin/login', response_class=HTMLResponse)
@@ -578,8 +601,7 @@ async def login(request: Request, username: str = Form(default=""), password: st
     if authed:
         _clear_login_fail(client_ip)
         token = jwt_manager.create_access_token(user_id=authed[0], username=authed[1], role=authed[2], expires_delta=timedelta(hours=12))
-        phone_count, sms_count = _db_counts(db)
-        response = HTMLResponse(ADMIN_HOME.replace('{{phone_count}}', str(phone_count)).replace('{{sms_count}}', str(sms_count)))
+        response = HTMLResponse(ADMIN_SHELL)
         response.set_cookie('access_token', token, httponly=True, max_age=12 * 3600)
         response.delete_cookie("session_id")
         return response
@@ -597,8 +619,7 @@ def logout(request: Request):
 @app.get('/admin/', response_class=HTMLResponse)
 def admin_home(request: Request, db: Session = Depends(get_db)):
     require_login(request)
-    phone_count, sms_count = _db_counts(db)
-    return HTMLResponse(ADMIN_HOME.replace('{{phone_count}}', str(phone_count)).replace('{{sms_count}}', str(sms_count)))
+    return HTMLResponse(ADMIN_SHELL)
 
 @app.get('/admin/phones', response_class=HTMLResponse)
 @app.get('/phones', response_class=HTMLResponse)
@@ -1108,20 +1129,24 @@ def bot_token_save(body: TokenSave, _: bool = Depends(require_admin_or_key)):
     env_file = _bot_env_file()
     if not env_file:
         raise HTTPException(status_code=500, detail="未找到机器人目录")
-    if os.path.isfile(env_file):
+    raw = open(env_file, "rb").read() if os.path.isfile(env_file) else b""
+    crlf = b"\r\n" in raw
+    if raw:
         try:
             import shutil
             shutil.copy(env_file, env_file + ".bak")
         except Exception:
             pass
-        content = open(env_file, encoding="utf-8", errors="replace").read()
+        content = raw.decode("utf-8", errors="replace")
         if re.search(r'^BOT_TOKEN=.*$', content, re.M):
             content = re.sub(r'^BOT_TOKEN=.*$', f'BOT_TOKEN={token}', content, flags=re.M)
         else:
-            content = content.rstrip("\n") + f"\nBOT_TOKEN={token}\n"
+            content = content.rstrip("\r\n") + f"\nBOT_TOKEN={token}\n"
     else:
         content = f"BOT_TOKEN={token}\n"
-    with open(env_file, "w", encoding="utf-8") as f:
+    if crlf:
+        content = content.replace("\n", "\r\n")
+    with open(env_file, "w", encoding="utf-8", newline="") as f:
         f.write(content)
     return {'message': 'TOKEN已保存，重启Bot后生效'}
 

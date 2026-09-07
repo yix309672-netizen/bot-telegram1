@@ -41,4 +41,4 @@ def test_argon2_password_login(monkeypatch):
     monkeypatch.setattr(m, 'ADMIN_PASSWORD_HASH', PasswordManager.hash_password('S3cret!Passw0rd'))
     c = TestClient(m.app)
     r = c.post('/admin/login', data={'username': 'admin', 'password': 'S3cret!Passw0rd'})
-    assert '快速操作' in r.text
+    assert '管理后台' in r.text
