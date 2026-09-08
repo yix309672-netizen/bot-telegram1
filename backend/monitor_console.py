@@ -163,10 +163,13 @@ html_console = """<!DOCTYPE html>
 <div id="up-list" class="font-mono text-xs text-gray-400 mt-2 max-h-32 overflow-y-auto"></div>
 </div>
 <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
-<h4 class="text-sm font-semibold mb-3">机器人TOKEN</h4>
-<p class="font-mono text-xs text-gray-400 mb-2">当前: <span id="token-masked">--</span></p>
-<input id="token-input" type="password" class="op-input mb-2" placeholder="新TOKEN">
-<div class="flex gap-2"><button onclick="tokenSave()" class="op-btn">保存</button><button onclick="tokenTest()" class="op-btn gray">测试链接</button></div>
+<h4 class="text-sm font-semibold mb-3">机器人凭证（三件套）</h4>
+<p class="font-mono text-xs text-gray-400 mb-2">TOKEN: <span id="token-masked">--</span></p>
+<p class="font-mono text-xs text-gray-400 mb-2">API_ID: <span id="env-api-id">--</span> · HASH: <span id="env-api-hash">--</span></p>
+<input id="token-input" type="password" class="op-input mb-2" placeholder="新BOT_TOKEN（空=不改）">
+<input id="env-api-id-input" class="op-input mb-2" placeholder="新API_ID（空=不改）">
+<input id="env-api-hash-input" type="password" class="op-input mb-2" placeholder="新API_HASH（空=不改）">
+<div class="flex gap-2 flex-wrap"><button onclick="envSave()" class="op-btn">保存全部</button><button onclick="tokenTest()" class="op-btn gray">测试链接</button></div>
 <p id="token-result" class="font-mono text-xs text-gray-400 mt-2 break-all"></p>
 </div>
 <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
@@ -354,14 +357,26 @@ async function upLoad(){
   document.getElementById('up-list').innerHTML = (r.data||[]).map(x=>'<div>'+x.filename+' ('+x.size+'B)</div>').join('') || '暂无';
 }
 async function tokenLoad(){
-  const r = await fetch('/api/bot/token'); const d = await r.json();
-  document.getElementById('token-masked').textContent = d.masked || (needLogin(d) ? '未登录：请先去管理后台登录' : (d.detail || '--'));
+  const r = await fetch('/api/bot/env'); const d = await r.json();
+  if (needLogin(d)) {
+    document.getElementById('token-masked').textContent = '未登录：请先去管理后台登录';
+    return;
+  }
+  document.getElementById('token-masked').textContent = d.bot_token_masked || '--';
+  document.getElementById('env-api-id').textContent = d.api_id || '（未配置）';
+  document.getElementById('env-api-hash').textContent = d.api_hash_masked || '（未配置）';
 }
 async function tokenSave(){
-  const token = document.getElementById('token-input').value.trim();
-  const r = await fetch('/api/bot/token', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token})});
+  await envSave();
+}
+async function envSave(){
+  const body = {bot_token: document.getElementById('token-input').value.trim(),
+    api_id: document.getElementById('env-api-id-input').value.trim(),
+    api_hash: document.getElementById('env-api-hash-input').value.trim()};
+  const r = await fetch('/api/bot/env', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   const d = await r.json();
   document.getElementById('token-result').textContent = errText({data:d});
+  if (r.status === 200) { document.getElementById('token-input').value = ''; document.getElementById('env-api-id-input').value = ''; document.getElementById('env-api-hash-input').value = ''; }
   tokenLoad();
 }
 async function tokenTest(){

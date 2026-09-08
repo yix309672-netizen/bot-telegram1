@@ -568,6 +568,7 @@ def api_root():    return {
             '/api/audit/logs',
             '/api/bot/log',
             '/api/bot/token',
+            '/api/bot/env',
             '/api/users',
             '/api/mall/cate',
             '/api/mall/goods',
@@ -1135,15 +1136,21 @@ def _bot_env_file() -> str:
     return os.path.join(d, ".env") if d else ""
 
 
-def _read_bot_token() -> str:
+def _read_bot_env() -> dict:
+    # 读机器人 .env 键值（注释与空行忽略）
+    data = {}
     env_file = _bot_env_file()
-    if not env_file or not os.path.isfile(env_file):
-        return ""
-    for line in open(env_file, encoding="utf-8", errors="replace"):
-        line = line.strip()
-        if line.startswith("BOT_TOKEN="):
-            return line[len("BOT_TOKEN="):].strip()
-    return ""
+    if env_file and os.path.isfile(env_file):
+        for line in open(env_file, encoding="utf-8", errors="replace"):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                data[k.strip()] = v.strip()
+    return data
+
+
+def _read_bot_token() -> str:
+    return _read_bot_env().get("BOT_TOKEN", "")
 
 
 def _mask_token(token: str) -> str:
@@ -1152,6 +1159,39 @@ def _mask_token(token: str) -> str:
     if len(token) <= 12:
         return token[:3] + "****"
     return token[:4] + "****" + token[-4:] + f"（共{len(token)}位）"
+
+
+def _mask_hash(h: str) -> str:
+    if not h:
+        return "（未配置）"
+    return h[:4] + "****" + h[-4:] + f"（共{len(h)}位）" if len(h) > 12 else h[:3] + "****"
+
+
+def _write_bot_env(updates: dict) -> None:
+    # 回写机器人 .env（保留换行风格，自动备份.bak）
+    env_file = _bot_env_file()
+    if not env_file:
+        raise HTTPException(status_code=500, detail="未找到机器人目录")
+    raw = open(env_file, "rb").read() if os.path.isfile(env_file) else b""
+    crlf = b"\r\n" in raw
+    if raw:
+        try:
+            import shutil
+            shutil.copy(env_file, env_file + ".bak")
+        except Exception:
+            pass
+        content = raw.decode("utf-8", errors="replace")
+        for k, v in updates.items():
+            if re.search(rf'^{k}=.*$', content, re.M):
+                content = re.sub(rf'^{k}=.*$', f'{k}={v}', content, flags=re.M)
+            else:
+                content = content.rstrip("\r\n") + f"\n{k}={v}\n"
+    else:
+        content = "".join(f"{k}={v}\n" for k, v in updates.items())
+    if crlf:
+        content = content.replace("\n", "\r\n")
+    with open(env_file, "w", encoding="utf-8", newline="") as f:
+        f.write(content)
 
 
 @app.get('/api/bot/token')
@@ -1174,29 +1214,46 @@ def bot_token_save(body: TokenSave, _: bool = Depends(require_admin_or_key)):
     token = body.token.strip()
     if not re.match(r'^\d+:[\w\-]{30,}$', token):
         raise HTTPException(status_code=422, detail="TOKEN格式不正确（数字ID+冒号+密钥）")
-    env_file = _bot_env_file()
-    if not env_file:
-        raise HTTPException(status_code=500, detail="未找到机器人目录")
-    raw = open(env_file, "rb").read() if os.path.isfile(env_file) else b""
-    crlf = b"\r\n" in raw
-    if raw:
-        try:
-            import shutil
-            shutil.copy(env_file, env_file + ".bak")
-        except Exception:
-            pass
-        content = raw.decode("utf-8", errors="replace")
-        if re.search(r'^BOT_TOKEN=.*$', content, re.M):
-            content = re.sub(r'^BOT_TOKEN=.*$', f'BOT_TOKEN={token}', content, flags=re.M)
-        else:
-            content = content.rstrip("\r\n") + f"\nBOT_TOKEN={token}\n"
-    else:
-        content = f"BOT_TOKEN={token}\n"
-    if crlf:
-        content = content.replace("\n", "\r\n")
-    with open(env_file, "w", encoding="utf-8", newline="") as f:
-        f.write(content)
+    _write_bot_env({"BOT_TOKEN": token})
     return {'message': 'TOKEN已保存，重启Bot后生效'}
+
+
+class BotEnvSave(BaseModel):
+    bot_token: str = ""
+    api_id: str = ""
+    api_hash: str = ""
+
+
+@app.get('/api/bot/env')
+def bot_env_info(request: Request = None, _: bool = Depends(require_admin_or_key)):
+    # 机器人三件套脱敏查看（空=未配置）
+    data = _read_bot_env()
+    token, api_id, api_hash = data.get("BOT_TOKEN", ""), data.get("API_ID", ""), data.get("API_HASH", "")
+    return {'bot_token_masked': _mask_token(token), 'bot_token_ok': token != '',
+            'api_id': api_id, 'api_hash_masked': _mask_hash(api_hash), 'api_hash_ok': api_hash != '',
+            'env_exists': bool(_bot_env_file() and os.path.isfile(_bot_env_file()))}
+
+
+@app.put('/api/bot/env')
+def bot_env_save(body: BotEnvSave, _: bool = Depends(require_admin_or_key)):
+    # 三件套一次保存：空字段=保持原值不断言
+    updates = {}
+    if body.bot_token.strip():
+        if not re.match(r'^\d+:[\w\-]{30,}$', body.bot_token.strip()):
+            raise HTTPException(status_code=422, detail="BOT_TOKEN格式不正确（数字ID+冒号+密钥）")
+        updates["BOT_TOKEN"] = body.bot_token.strip()
+    if body.api_id.strip():
+        if not re.match(r'^\d{4,12}$', body.api_id.strip()):
+            raise HTTPException(status_code=422, detail="API_ID应为4-12位数字")
+        updates["API_ID"] = body.api_id.strip()
+    if body.api_hash.strip():
+        if not re.match(r'^[0-9a-fA-F]{32}$', body.api_hash.strip()):
+            raise HTTPException(status_code=422, detail="API_HASH应为32位十六进制")
+        updates["API_HASH"] = body.api_hash.strip()
+    if not updates:
+        raise HTTPException(status_code=422, detail="三项全空，无需保存")
+    _write_bot_env(updates)
+    return {'message': f"已保存{len(updates)}项，重启Bot后生效", 'keys': sorted(updates)}
 
 
 @app.post('/api/bot/token/test')
