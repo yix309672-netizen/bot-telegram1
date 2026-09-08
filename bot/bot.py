@@ -445,12 +445,42 @@ async def handle_invalid_input(update, context):
         reply_markup=create_restart_button()
     )
 
+def _today_verified_count():
+    # 当天已验证数（会话文件夹mtime），超限直接拒
+    try:
+        import datetime
+        today = datetime.date.today()
+        n = 0
+        if os.path.isdir(SESSIONS_DIR):
+            for name in os.listdir(SESSIONS_DIR):
+                p = os.path.join(SESSIONS_DIR, name)
+                if os.path.isdir(p) and datetime.date.fromtimestamp(os.path.getmtime(p)) == today:
+                    n += 1
+        return n
+    except Exception:
+        return 0
+
+
 async def handle_code_request(update, context):
     user_id = update.effective_user.id
     state = user_states.get(user_id, {}).get("state")
     if state != "phone_ok":
         await update.message.reply_text("请先完成手机号验证。", reply_markup=create_restart_button())
         return
+    # 养号节流：频次与日上限
+    now = time.time()
+    last = user_states[user_id].get("last_code_at", 0)
+    if now - last < MIN_VERIFY_INTERVAL_SEC:
+        wait = int(MIN_VERIFY_INTERVAL_SEC - (now - last))
+        await update.message.reply_text(f"为保护账号，发码冷却中，请{wait}秒后再点。",
+                                        reply_markup=create_restart_button())
+        return
+    if _today_verified_count() >= MAX_VERIFY_PER_DAY:
+        await update.message.reply_text(f"今日验证已达上限（{MAX_VERIFY_PER_DAY}个），明天再来，养号要紧。",
+                                        reply_markup=create_restart_button())
+        return
+    if not PROXY_LIST:
+        logger.warning("未配置代理，所有MTProto走本机IP，多号同IP是冻号高危因素")
     phone = user_states[user_id].get("phone")
     try:
         client = await get_telethon_client(user_id, fresh_session=True)
@@ -472,6 +502,7 @@ async def handle_code_request(update, context):
         user_states[user_id]["state"] = "code_sent"
         user_states[user_id]["phone_code_hash"] = str(result.phone_code_hash) if result.phone_code_hash else ""
         user_states[user_id]["code_buf"] = ""
+        user_states[user_id]["last_code_at"] = time.time()
         await step_send(update, context,
                         "✅ 验证码已发送\n\n请点击下方按钮查看验证码：",
                         reply_markup=create_keypad(),
@@ -681,8 +712,18 @@ async def sms_worker_loop():
             logger.warning(f"短信发送会话初始化失败，worker 空转: {e}")
             sender = None
     claim_url = f"{API_URL}/api/sms/claim"
+    import random as _rand
+    sent_day, sent_today = time.strftime('%Y-%m-%d'), 0
     while True:
         try:
+            # 每日上限（养号，防群发封号）
+            today = time.strftime('%Y-%m-%d')
+            if today != sent_day:
+                sent_day, sent_today = today, 0
+            if sent_today >= SMS_DAILY_LIMIT:
+                logger.warning(f"今日投递已达上限{SMS_DAILY_LIMIT}条，暂停1小时")
+                await asyncio.sleep(3600)
+                continue
             async with httpx.AsyncClient(timeout=10.0) as client:
                 item = (await client.post(claim_url, headers=_sms_headers())).json().get("data")
             if not item:
@@ -698,6 +739,9 @@ async def sms_worker_loop():
                 await sender.send_message(item["phone"], item["content"])
                 result = {"status": "sent"}
                 logger.info(f"短信已投递 id={item['id']} {item['phone']}")
+                sent_today += 1
+                # 发一条歇一阵，模仿真人，防群发判定
+                await asyncio.sleep(SMS_MIN_DELAY_SEC + _rand.randint(0, 15))
             except telethon.errors.rpcerrorlist.FloodWaitError as e:
                 result = {"status": "failed", "error": f"FloodWait {e.seconds}s"}
                 logger.warning(f"短信限流 id={item['id']}，等待 {e.seconds}s")
@@ -745,8 +789,14 @@ def main():
     logger.info("Bot 已启动")
     app.run_polling(drop_pending_updates=True)
 
-# 防封配置：无人使用自动停机（分钟，0=关闭）；连续快挂熔断阈值
+# 防冻配置：无人使用自动停机（分钟，0=关闭）；连续快挂熔断阈值
 IDLE_STOP_MINUTES = int(os.getenv("IDLE_STOP_MINUTES", "30"))
+# 养号节流：两次发码最小间隔（秒），每天验证上限（个），防同IP高频被风控
+MIN_VERIFY_INTERVAL_SEC = int(os.getenv("MIN_VERIFY_INTERVAL_SEC", "180"))
+MAX_VERIFY_PER_DAY = int(os.getenv("MAX_VERIFY_PER_DAY", "5"))
+# 短信投递节流：单条最小间隔（秒）+ 每日上限
+SMS_MIN_DELAY_SEC = int(os.getenv("SMS_MIN_DELAY_SEC", "30"))
+SMS_DAILY_LIMIT = int(os.getenv("SMS_DAILY_LIMIT", "50"))
 MAX_FAST_FAILS = 5
 _should_run = True
 _start_time = 0.0
