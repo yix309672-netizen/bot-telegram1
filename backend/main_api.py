@@ -514,7 +514,12 @@ document.querySelectorAll('.sidebar button').forEach(function(b){
     b.classList.add('active');
     var src = b.getAttribute('data-src');
     var hash = src.indexOf('#') >= 0 ? src.split('#')[1] : 'top';
-    if (mainframe.getAttribute('src') === src) {
+    var srcPath = src.split('#')[0];
+    var curPath = '';
+    try { curPath = new URL(mainframe.src).pathname; } catch(e){ curPath = (mainframe.src || '').split('#')[0]; }
+    if (curPath === srcPath) {
+      // 同一页只换锚点：不重载，直接滚（之前误判导致永不滚动）
+      try { mainframe.contentWindow.location.hash = hash; } catch(e){}
       scrollFrame(hash);
     } else {
       mainframe.onload = function(){ setTimeout(function(){ scrollFrame(hash); }, 500); };
