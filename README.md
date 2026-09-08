@@ -103,9 +103,10 @@ docker-compose down
 
 | 方法   | 路径                | 说明       |
 |------|-------------------|----------|
-| POST | /api/phone/generate | 生成香港号码   |
+| POST | /api/phone/generate | 生成香港号码（可带prefixes定向号段） |
 | POST | /api/phone/validate | 验证号码（同步回写库内状态） |
 | POST | /api/phone/import   | 批量导入号码（去重+校验） |
+| GET  | /api/phone/prefixes | 号段库（实号率/星级，截图第三方平台43个种子） |
 | GET  | /api/phone/list     | 号码列表（status/limit/offset） |
 | DELETE | /api/phone/{id}   | 按ID删除     |
 
