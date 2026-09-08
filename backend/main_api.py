@@ -1004,11 +1004,16 @@ def start_bot(_: bool = Depends(require_admin_or_key)):
             return {'message': '未找到 bot.py（可用 BOT_SCRIPT 环境变量指定）', 'status': 'error'}
         if not bot_cwd:
             bot_cwd = os.path.dirname(bot_script)
+        # 子进程环境必须剔除机器人三件套：根.env 的旧值会透过继承盖掉 bot/.env，
+        # 且 load_dotenv 默认不覆盖已有变量（此前死 token 阴魂不散的根因）
+        child_env = {k: v for k, v in os.environ.items()
+                     if k not in ("BOT_TOKEN", "API_ID", "API_HASH")}
         # 输出重定向到 bot.log，否则崩溃原因无处可查（机器人日志页读此文件）
         log_path = os.path.join(bot_cwd, "bot.log")
         log_fp = open(log_path, "a", encoding="utf-8")
         bot_process = subprocess.Popen([sys.executable, "-u", bot_script], cwd=bot_cwd,
-                                       stdout=log_fp, stderr=subprocess.STDOUT, close_fds=True)
+                                       stdout=log_fp, stderr=subprocess.STDOUT, close_fds=True,
+                                       env=child_env)
         return {'message': 'Bot started successfully', 'status': 'running'}
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
