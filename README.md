@@ -30,7 +30,7 @@
 ├── admin/               # PHP ThinkPHP 后台（含机器人TOKEN链接独立页 strategy.bot_token）
 ├── lib/                 # 共享库
 │   └── converter_client.py  # 转换服务客户端
-├── scripts/             # 工具脚本：start_converter / test_api冒烟 / import_phones导入
+├── scripts/             # 工具脚本：start_backend / test_api冒烟 / import_phones导入
 ├── tests/               # pytest 测试（16+ 用例）
 ├── nginx/               # 反向代理配置
 ├── deploy/              # 部署方案和文档
@@ -73,7 +73,7 @@ pip install -r requirements.txt
 uvicorn backend.main_api:app --reload --port 8000
 
 # 启动统一后端（含展示页与转换服务）
-python scripts/start_converter.py
+python scripts/start_backend.py
 
 # 启动机器人（新开终端）
 python bot/bot.py

@@ -350,10 +350,6 @@ class SendSMSRequest(BaseModel):
     content: str
     sender: str = "TelegramBot"
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
 def generate_hk_number(prefix: str = ""):
     import random
     if prefix:
@@ -405,8 +401,12 @@ HTML_TEMPLATE = """
     th{background:#f9fafb;font-weight:600;color:#374151}
     .form-group{margin-bottom:15px}
     .form-group label{display:block;margin-bottom:6px;color:#555}
-    .form-group input{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px}
+    .form-group input{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;transition:border-color .15s, box-shadow .15s}
+    .form-group input:focus{outline:none;border-color:#667eea;box-shadow:0 0 0 3px rgba(102,126,234,.15)}
     .login-form{max-width:400px;margin:100px auto}
+    .login-form h2{margin-bottom:18px}
+    .btn{transition:background .15s, transform .05s}
+    .btn:active{transform:scale(.97)}
   </style>
 </head>
 <body>
@@ -455,15 +455,15 @@ ADMIN_SHELL = """
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#111827;color:#e5e7eb;height:100vh;display:flex;flex-direction:column}
-    .topbar{background:#1f2937;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #374151}
-    .topbar h1{font-size:18px}
+    .topbar{background:linear-gradient(135deg,#4c1d95,#6d28d3 55%,#7c3aed);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #374151;box-shadow:0 2px 12px rgba(0,0,0,.35)}
+    .topbar h1{font-size:18px;letter-spacing:.5px}
     .topbar a{color:#9ca3af;text-decoration:none}
     .topbar a:hover{color:#fff}
     .wrap{flex:1;display:flex;min-height:0}
     .sidebar{width:200px;background:#1f2937;border-right:1px solid #374151;padding:12px 0;flex-shrink:0;overflow-y:auto}
-    .sidebar button{display:block;width:100%;text-align:left;background:none;border:none;color:#d1d5db;padding:10px 20px;font-size:14px;cursor:pointer;border-left:3px solid transparent}
+    .sidebar button{display:block;width:100%;text-align:left;background:none;border:none;color:#d1d5db;padding:10px 20px;font-size:14px;cursor:pointer;border-left:3px solid transparent;transition:background .15s,color .15s}
     .sidebar button:hover{background:#374151;color:#fff}
-    .sidebar button.active{background:#374151;color:#fff;border-left-color:#22c55e}
+    .sidebar button.active{background:#374151;color:#fff;border-left-color:#22c55e;box-shadow:inset 0 0 12px rgba(34,197,94,.15)}
     .side-group{padding:10px 20px 4px;font-size:12px;color:#6b7280}
     .sidebar button{display:block;width:100%;text-align:left;background:none;border:none;color:#d1d5db;padding:12px 20px;font-size:14px;cursor:pointer;border-left:3px solid transparent}
     .sidebar button:hover{background:#374151;color:#fff}

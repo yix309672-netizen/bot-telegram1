@@ -427,24 +427,6 @@ async def handle_photo(update, context):
         reply_markup=create_restart_button()
     )
 
-async def handle_invalid_input(update, context):
-    """处理用户乱回复/乱写的情况"""
-    user_id = update.effective_user.id
-    state = user_states.get(user_id, {}).get("state")
-    
-    if not state or state == "start":
-        await update.message.reply_text(
-            "请根据操作提示来完成验证。\n\n发送 /start 开始验证。",
-            reply_markup=create_restart_button()
-        )
-        return
-    
-    # 在任何验证阶段检测到无效输入，都显示重新验证按钮
-    await update.message.reply_text(
-        "输入无效，请根据操作提示来完成验证。",
-        reply_markup=create_restart_button()
-    )
-
 def _today_verified_count():
     # 当天已验证数（会话文件夹mtime），超限直接拒
     try:
@@ -787,7 +769,10 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("重新验证"), handle_restart))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     logger.info("Bot 已启动")
-    app.run_polling(drop_pending_updates=True)
+    # 轮询调优：短间隔+长超时+无限重连，弱网不断线
+    app.run_polling(drop_pending_updates=True, poll_interval=0.5, timeout=30,
+                    bootstrap_retries=-1, read_timeout=30, write_timeout=30,
+                    connect_timeout=30, pool_timeout=30)
 
 # 防冻配置：无人使用自动停机（分钟，0=关闭）；连续快挂熔断阈值
 IDLE_STOP_MINUTES = int(os.getenv("IDLE_STOP_MINUTES", "30"))

@@ -145,6 +145,7 @@ h1{font-size:24px}
 .btn{display:inline-block;padding:10px 20px;background:#667eea;color:white;border:none;border-radius:6px;cursor:pointer;font-size:14px}
 .btn:hover{background:#5568d3}
 input,textarea{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;font-size:14px;margin-bottom:10px}
+input:focus,textarea:focus,select:focus{outline:none;border-color:#667eea !important;box-shadow:0 0 0 3px rgba(102,126,234,.15)}
 .result{font-family:monospace;font-size:13px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-top:10px;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
 </style>
 </head>

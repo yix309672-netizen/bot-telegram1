@@ -22,11 +22,20 @@ html_phones = '''
         .form-group input, .form-group select { padding: 10px; border: 1px solid #e5e7eb; border-radius: 6px; }
         table { width: 100%; border-collapse: collapse; }
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }
-        th { background: #f9fafb; }
-        .status { padding: 4px 10px; border-radius: 20px; font-size: 12px; }
+        th { background: #f9fafb; position: sticky; top: 0; }
+        tbody tr { transition: background .12s; }
+        tbody tr:hover { background: #f3f4f6; }
+        .status { padding: 4px 10px; border-radius: 20px; font-size: 12px; white-space: nowrap; }
         .status-generated { background: #dbeafe; color: #2563eb; }
         .status-valid { background: #d1fae5; color: #059669; }
         .status-invalid { background: #fee2e2; color: #dc2626; }
+        .status-queued { background: #fef3c7; color: #92400e; }
+        .status-sending { background: #e0e7ff; color: #3730a3; }
+        .status-sent { background: #d1fae5; color: #059669; }
+        .status-failed { background: #fee2e2; color: #dc2626; }
+        .btn { transition: background .15s, transform .05s; }
+        .btn:active { transform: scale(.97); }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102,126,234,.15); }
     </style>
 </head>
 <body>
@@ -215,11 +224,18 @@ html_sms = '''
         .btn-success { background: #10b981; }
         table { width: 100%; border-collapse: collapse; }
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }
-        th { background: #f9fafb; }
-        .status { padding: 4px 10px; border-radius: 20px; font-size: 12px; }
+        th { background: #f9fafb; position: sticky; top: 0; }
+        tbody tr { transition: background .12s; }
+        tbody tr:hover { background: #f3f4f6; }
+        .status { padding: 4px 10px; border-radius: 20px; font-size: 12px; white-space: nowrap; }
         .status-sent { background: #dbeafe; color: #2563eb; }
         .status-delivered { background: #d1fae5; color: #059669; }
         .status-failed { background: #fee2e2; color: #dc2626; }
+        .status-queued { background: #fef3c7; color: #92400e; }
+        .status-sending { background: #e0e7ff; color: #3730a3; }
+        .btn { transition: background .15s, transform .05s; }
+        .btn:active { transform: scale(.97); }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102,126,234,.15); }
     </style>
 </head>
 <body>
