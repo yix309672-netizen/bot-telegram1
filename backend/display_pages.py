@@ -15,7 +15,8 @@ html_phones = '''
         h1 { font-size: 24px; }
         .nav a { color: white; text-decoration: none; padding: 8px 16px; background: rgba(255,255,255,0.2); border-radius: 4px; margin-right: 8px; }
         .container { max-width: 1400px; margin: 20px auto; padding: 0 20px; }
-        .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+        .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; overflow-x: auto; }
+        table { min-width: 640px; }
         .btn { display: inline-block; padding: 10px 16px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; }
         .btn-danger { background: #ef4444; }
         .form-group input, .form-group select { padding: 10px; border: 1px solid #e5e7eb; border-radius: 6px; }
@@ -39,7 +40,7 @@ html_phones = '''
         </nav>
     </div>
     <div class="container">
-        <div style="margin-bottom: 20px; display: flex; gap: 10px;">
+        <div style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
             <button class="btn" onclick="openModal('generateModal')">➕ 生成号码</button>
             <button class="btn" onclick="validateAll()">✅ 验证所有</button>
             <button class="btn btn-danger" onclick="deleteAll()">🗑️ 删除无效</button>
@@ -71,7 +72,7 @@ html_phones = '''
     </div>
 
     <div style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;" id="generateModal">
-        <div style="background:white; padding:30px; border-radius:12px; width:400px;">
+        <div style="background:white; padding:30px; border-radius:12px; width:400px;max-width:92vw;">
             <h3 style="margin-bottom:20px">生成香港号码</h3>
             <div class="form-group">
                 <label>数量 (1-100)</label>
@@ -94,7 +95,9 @@ html_phones = '''
                 const res = await fetch(url);
                 const data = await res.json();
                 renderTable(data.data || []);
-            } catch(e) { console.error(e); }
+            } catch(e) {
+                document.getElementById('phoneTable').innerHTML = '<tr><td colspan="6" style="text-align:center;color:#dc2626;">加载失败：后端可能未启动或未登录</td></tr>';
+            }
         }
 
         function renderTable(phones) {
@@ -206,7 +209,8 @@ html_sms = '''
         .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; }
         h1 { font-size: 24px; }
         .container { max-width: 1400px; margin: 20px auto; padding: 0 20px; }
-        .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+        .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; overflow-x: auto; }
+        table { min-width: 640px; }
         .btn { display: inline-block; padding: 10px 16px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; }
         .btn-success { background: #10b981; }
         table { width: 100%; border-collapse: collapse; }
@@ -229,7 +233,7 @@ html_sms = '''
         </nav>
     </div>
     <div class="container">
-        <div style="margin-bottom:10px; display:flex; gap:10px;">
+        <div style="margin-bottom:10px; display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn btn-success" onclick="document.getElementById('smsModal').style.display='flex'">📤 发送短信</button>
         <select id="smsStatusFilter" onchange="loadSMS()" style="padding: 10px; border-radius: 6px;">
             <option value="">全部状态</option>
@@ -260,7 +264,7 @@ html_sms = '''
     </div>
 
     <div style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;" id="smsModal">
-        <div style="background:white; padding:30px; border-radius:12px; width:450px;">
+        <div style="background:white; padding:30px; border-radius:12px; width:450px;max-width:92vw;">
             <h3 style="margin-bottom:20px">发送短信</h3>
             <div class="form-group"><label>手机号</label><input type="text" id="smsPhone"></div>
             <div class="form-group"><label>内容</label><textarea id="smsContent" rows="3"></textarea></div>
@@ -277,7 +281,9 @@ html_sms = '''
                 const res = await fetch(API_BASE + '/api/sms/list' + (status ? '?status=' + status : ''));
                 const data = await res.json();
                 renderTable(data.data || []);
-            } catch(e) { console.error(e); }
+            } catch(e) {
+                document.getElementById('smsTable').innerHTML = '<tr><td colspan="7" style="text-align:center;color:#dc2626;">加载失败：后端可能未启动或未登录</td></tr>';
+            }
         }
 
         function renderTable(records) {

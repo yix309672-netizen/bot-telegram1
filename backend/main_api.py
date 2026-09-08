@@ -447,6 +447,13 @@ ADMIN_SHELL = """
     .sidebar button.active{background:#374151;color:#fff;border-left-color:#22c55e}
     .content{flex:1;min-width:0}
     .content iframe{width:100%;height:100%;border:none;background:#fff}
+    @media (max-width:768px){
+      .wrap{flex-direction:column}
+      .sidebar{width:100%;display:flex;overflow-x:auto;padding:0;border-right:none;border-bottom:1px solid #374151}
+      .sidebar button{white-space:nowrap;border-left:none;border-bottom:3px solid transparent;padding:10px 14px}
+      .sidebar button.active{border-bottom-color:#22c55e}
+      .topbar h1{font-size:15px}
+    }
   </style>
 </head>
 <body>

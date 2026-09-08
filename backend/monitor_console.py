@@ -51,7 +51,7 @@ html_console = """<!DOCTYPE html>
 </nav>
 <div class="p-4">
 <!-- 指标卡 -->
-<div class="grid grid-cols-5 gap-3 mb-4">
+<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
 <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
 <div class="flex justify-between items-start mb-2"><span class="text-xs text-gray-500">号码总数</span><span class="w-2 h-2 bg-green-500 rounded-full animate-pulse-green"></span></div>
 <p id="m-phones" class="text-3xl font-mono font-bold text-green-400">--</p>
@@ -79,8 +79,8 @@ html_console = """<!DOCTYPE html>
 </div>
 </div>
 <!-- 图表 + 服务 -->
-<div class="grid grid-cols-3 gap-4 mb-4">
-<div class="col-span-2 bg-gray-900 rounded-lg p-4 border border-gray-800">
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+<div class="lg:col-span-2 bg-gray-900 rounded-lg p-4 border border-gray-800">
 <div class="flex justify-between items-center mb-4">
 <h3 class="text-sm font-semibold">请求量（实时）</h3>
 <span class="text-xs text-gray-500">窗口内合计: <span id="req-total" class="text-white font-mono">0</span></span>
@@ -108,7 +108,7 @@ html_console = """<!DOCTYPE html>
 </div>
 <!-- 操作区 -->
 <h3 class="text-sm font-semibold mb-3 text-gray-300">快捷操作（全部功能）</h3>
-<div class="grid grid-cols-3 gap-4 mb-4">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
 <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
 <h4 class="text-sm font-semibold mb-3">生成号码</h4>
 <div class="flex gap-2"><input id="gen-count" type="number" value="5" min="1" max="100" class="op-input"><button onclick="opGenerate()" class="op-btn">生成</button></div>
@@ -148,7 +148,7 @@ html_console = """<!DOCTYPE html>
 </div>
 <!-- 管理功能区（原PHP后台迁移） -->
 <h3 class="text-sm font-semibold mb-3 text-gray-300">管理功能（需管理员登录）</h3>
-<div class="grid grid-cols-3 gap-4 mb-4">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
 <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
 <h4 class="text-sm font-semibold mb-3">系统配置</h4>
 <div id="cfg-list" class="font-mono text-xs text-gray-400 mb-2 max-h-32 overflow-y-auto"></div>
@@ -187,8 +187,8 @@ html_console = """<!DOCTYPE html>
 <button onclick="botLogLoad()" class="op-btn gray mt-2">刷新</button>
 </div>
 </div>
-<div class="grid grid-cols-3 gap-4 mb-4">
-<div class="bg-gray-900 rounded-lg p-4 border border-gray-800 col-span-2">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800 md:col-span-2">
 <h4 class="text-sm font-semibold mb-3">操作审计（最近20条）</h4>
 <div id="audit-list" class="font-mono text-xs text-gray-400 max-h-40 overflow-y-auto"></div>
 <button onclick="auditLoad()" class="op-btn gray mt-2">刷新</button>
@@ -222,11 +222,17 @@ document.querySelectorAll('.log-filter').forEach(b => b.onclick = function(){
   this.className = 'log-filter px-2 py-1 bg-green-600 text-xs rounded cursor-pointer';
   refreshAll();
 });
-async function jget(url){ const r = await fetch(url); return r.json(); }
+async function jget(url){ try { const r = await fetch(url); return await r.json(); } catch(e){ return {_neterr:String(e).slice(0,120)}; } }
 async function jpost(url, body){
-  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  return {status:r.status, data:await r.json()};
+  try {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    let data = {};
+    try { data = await r.json(); } catch(e){ data = {detail:'非JSON响应'}; }
+    return {status:r.status, data};
+  } catch(e){ return {status:0, data:{detail:'网络不通：'+String(e).slice(0,100)}}; }
 }
+function needLogin(d){ return d && d.detail === 'Not authenticated'; }
+function errText(r){ const d = (r && r.data) || {}; if (needLogin(d)) return '未登录：请先去管理后台登录'; return errText({data:d}); }
 function dotColor(ok){ return ok ? 'bg-green-500' : 'bg-red-500'; }
 function levelColor(l){ return l==='ERROR' ? 'text-red-400' : (l==='WARN' ? 'text-yellow-400' : 'text-green-400'); }
 async function refreshAll(){
@@ -277,22 +283,22 @@ function lines(id){ return document.getElementById(id).value.split('\\n').map(s=
 async function opGenerate(){
   const n = parseInt(document.getElementById('gen-count').value) || 5;
   const r = await jpost('/api/phone/generate', {count:n});
-  document.getElementById('gen-result').textContent = r.status===200 ? '生成'+r.data.count+'个: '+(r.data.data.map(x=>x.number).join(', ')) : '失败: '+JSON.stringify(r.data);
+  document.getElementById('gen-result').textContent = r.status===200 ? '生成'+r.data.count+'个: '+(r.data.data.map(x=>x.number).join(', ')) : '失败: '+errText(r);
   refreshAll();
 }
 async function opValidate(){
   const r = await jpost('/api/phone/validate', {numbers:lines('val-numbers')});
-  document.getElementById('val-result').textContent = r.status===200 ? r.data.data.map(x=>x.number+':'+(x.is_valid?'有效':'无效')).join(' | ') : '失败: '+JSON.stringify(r.data);
+  document.getElementById('val-result').textContent = r.status===200 ? r.data.data.map(x=>x.number+':'+(x.is_valid?'有效':'无效')).join(' | ') : '失败: '+errText(r);
   refreshAll();
 }
 async function opImport(){
   const r = await jpost('/api/phone/import', {numbers:lines('imp-numbers')});
-  document.getElementById('imp-result').textContent = r.status===200 ? ('新增'+r.data.imported+'，重复'+r.data.skipped_dup+'，非法'+r.data.skipped_invalid.length) : '失败: '+JSON.stringify(r.data);
+  document.getElementById('imp-result').textContent = r.status===200 ? ('新增'+r.data.imported+'，重复'+r.data.skipped_dup+'，非法'+r.data.skipped_invalid.length) : '失败: '+errText(r);
   refreshAll();
 }
 async function opSms(){
   const r = await jpost('/api/sms/send', {phone:document.getElementById('sms-phone').value, content:document.getElementById('sms-content').value, sender:'Console'});
-  document.getElementById('sms-result').textContent = r.status===200 ? ('已入队 id='+r.data.sms_id) : '失败: '+JSON.stringify(r.data);
+  document.getElementById('sms-result').textContent = r.status===200 ? ('已入队 id='+r.data.sms_id) : '失败: '+errText(r);
   refreshAll(); smsQueueLoad();
 }
 async function smsQueueLoad(){
@@ -310,7 +316,7 @@ async function smsRequeue(id){
 }
 async function opBot(act){
   const r = await jpost('/api/bot/'+act, {});
-  document.getElementById('bot-result').textContent = r.data.message || JSON.stringify(r.data);
+  document.getElementById('bot-result').textContent = errText(r);
   setTimeout(refreshAll, 1500);
 }
 async function opConvert(){
@@ -326,7 +332,7 @@ async function cfgSave(){
   const value = document.getElementById('cfg-value').value;
   const resp = await fetch('/api/system/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key, value})});
   const d = await resp.json();
-  alert(d.message || d.detail || JSON.stringify(d));
+  alert(errText({data:d}));
   cfgLoad(); refreshAll();
 }
 async function upGo(){
@@ -335,7 +341,7 @@ async function upGo(){
   const fd = new FormData(); fd.append('file', f);
   const r = await fetch('/api/upload', {method:'POST', body:fd});
   const d = await r.json();
-  alert(d.message || d.detail || JSON.stringify(d));
+  alert(errText({data:d}));
   upLoad(); refreshAll();
 }
 async function upLoad(){
@@ -344,23 +350,23 @@ async function upLoad(){
 }
 async function tokenLoad(){
   const r = await fetch('/api/bot/token'); const d = await r.json();
-  document.getElementById('token-masked').textContent = d.masked || d.detail || '--';
+  document.getElementById('token-masked').textContent = d.masked || (needLogin(d) ? '未登录：请先去管理后台登录' : (d.detail || '--'));
 }
 async function tokenSave(){
   const token = document.getElementById('token-input').value.trim();
   const r = await fetch('/api/bot/token', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token})});
   const d = await r.json();
-  document.getElementById('token-result').textContent = d.message || d.detail || JSON.stringify(d);
+  document.getElementById('token-result').textContent = errText({data:d});
   tokenLoad();
 }
 async function tokenTest(){
   const token = document.getElementById('token-input').value.trim();
   const r = await jpost('/api/bot/token/test', {token});
-  document.getElementById('token-result').textContent = r.status===200 ? ('连通: '+r.data.username) : ('失败: '+JSON.stringify(r.data));
+  document.getElementById('token-result').textContent = r.status===200 ? ('连通: '+r.data.username) : ('失败: '+errText(r));
 }
 async function userLoad(){
   const r = await fetch('/api/users'); const d = await r.json();
-  if (!d.data) { document.getElementById('user-list').innerHTML = '需管理员登录'; return; }
+  if (!d.data) { document.getElementById('user-list').innerHTML = '需管理员登录（管理后台进）'; return; }
   document.getElementById('user-list').innerHTML = d.data.map(u =>
     '<div>'+u.username+' ['+u.role+'] '+(u.status?'启用':'禁用')+
     ' <a href="javascript:userToggle('+u.id+','+(u.status?0:1)+')" class="text-blue-400">启/禁</a>'+
@@ -392,7 +398,7 @@ async function botLogLoad(){
 }
 async function auditLoad(){
   const r = await jget('/api/audit/logs?limit=20');
-  if (!r.data) { document.getElementById('audit-list').innerHTML = '需登录查看'; return; }
+  if (!r.data) { document.getElementById('audit-list').innerHTML = '需登录查看（管理后台进）'; return; }
   document.getElementById('audit-list').innerHTML = r.data.map(a =>
     '<div>['+a.method+'] '+a.path+' → '+a.status+' <span class="text-gray-600">'+a.username+' '+a.ip+'</span></div>').join('') || '暂无';
 }
