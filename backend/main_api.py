@@ -495,11 +495,31 @@ ADMIN_SHELL = """
     </div>
   </div>
 <script>
+var mainframe = document.getElementById('mainframe');
+// 锚点直达：父页面直接滚iframe内元素（同源），不依赖子页自身滚动
+var anchorMap = {top:null, ops:'gen-count', convert:'conv-session', smsqueue:'sms-queue',
+  cfg:'cfg-list', upload:'up-file', users:'user-list', botlog:'bot-log',
+  audit:'audit-list', mall:'cate-list', tgswitch:'tg-list'};
+function scrollFrame(hash){
+  try {
+    var doc = mainframe.contentDocument || mainframe.contentWindow.document;
+    if (!hash || hash === 'top') { mainframe.contentWindow.scrollTo(0, 0); return; }
+    var id = anchorMap[hash];
+    if (id) { var el = doc.getElementById(id); if (el) el.scrollIntoView({block:'start'}); }
+  } catch(e){}
+}
 document.querySelectorAll('.sidebar button').forEach(function(b){
   b.addEventListener('click', function(){
     document.querySelectorAll('.sidebar button').forEach(function(x){x.classList.remove('active')});
     b.classList.add('active');
-    document.getElementById('mainframe').src = b.getAttribute('data-src');
+    var src = b.getAttribute('data-src');
+    var hash = src.indexOf('#') >= 0 ? src.split('#')[1] : 'top';
+    if (mainframe.getAttribute('src') === src) {
+      scrollFrame(hash);
+    } else {
+      mainframe.onload = function(){ setTimeout(function(){ scrollFrame(hash); }, 500); };
+      mainframe.src = src;
+    }
   });
 });
 </script>
