@@ -140,7 +140,7 @@ async function jpost(url, body){
   } catch(e){ return {status:0, data:{detail:'网络不通：'+String(e).slice(0,100)}}; }
 }
 function needLogin(d){ return d && d.detail === 'Not authenticated'; }
-function errText(r){ const d = (r && r.data) || {}; if (needLogin(d)) return '未登录：请先去管理后台登录'; return errText({data:d}); }
+function errText(r){ const d = (r && r.data) || {}; if (needLogin(d)) return '未登录：请先去管理后台登录'; return d.message || d.detail || JSON.stringify(d); }
 function dotColor(ok){ return ok ? 'bg-green-500' : 'bg-red-500'; }
 function levelColor(l){ return l==='ERROR' ? 'text-red-400' : (l==='WARN' ? 'text-yellow-400' : 'text-green-400'); }
 async function refreshAll(){

@@ -11,6 +11,10 @@ def test_console_public():
     assert r.status_code == 200
     for needle in ('实时监控台', 'm-phones', 'logstream', 'req-total', 'console-botlog'):
         assert needle in r.text
+    # errText 定义体不得自调用（曾经replaceAll误伤导致失败路径栈溢出）
+    import re
+    m = re.search(r'function errText\(r\)\{(.*?)\}', r.text)
+    assert m and 'errText(' not in m.group(1)
     for gone in ('opGenerate', 'opConvert', 'cfgSave', 'userAdd', 'mallLoad', 'tgSwitch'):
         assert gone not in r.text
 
