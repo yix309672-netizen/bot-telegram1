@@ -128,6 +128,19 @@ class BotInstance(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class PhonePrefix(Base):
+    # 号段表：定向生成用（实号率/推荐度为外部平台参考值，可自行维护）
+    __tablename__ = "phone_prefix"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    prefix: Mapped[str] = mapped_column(String(10), unique=True, index=True)
+    country: Mapped[str] = mapped_column(String(10), default="HK")
+    live_rate: Mapped[int] = mapped_column(Integer, default=0)
+    stars: Mapped[int] = mapped_column(Integer, default=0)
+    remark: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 def _default_sqlite_url() -> str:
     # 默认 SQLite 落到 backend/data/app.db，与代码同盘，开箱可用
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")

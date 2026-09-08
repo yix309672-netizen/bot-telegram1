@@ -25,6 +25,7 @@ def test_ops_pages_content():
     assert 'bot-grid' in b and 'botAdd' in b and 'botStart' in b and 'botDel' in b and 'botLog' in b
     p = c2.get('/admin/phone-tool', cookies=ck).text
     assert 'toolGenerate' in p and 'toolValidate' in p and 'toolImport' in p
+    assert 'prefix-list' in p and 'toolGenerateSelected' in p and 'prefixAdd' in p
     assert 'convGo' in c2.get('/admin/convert', cookies=ck).text
     s = c2.get('/admin/system', cookies=ck).text
     assert 'cfgSave' in s and 'userAdd' in s and 'auditLoad' in s

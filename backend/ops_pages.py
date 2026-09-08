@@ -164,6 +164,19 @@ input,textarea{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6p
 <div id="val-result" class="result">尚未验证</div>
 </div>
 <div class="card">
+<h2>香港号段定向生成（勾选+数量）</h2>
+<div id="prefix-list" style="font-family:monospace;font-size:13px;max-height:220px;overflow:auto;margin-bottom:10px;"></div>
+<div style="display:flex;gap:10px;align-items:center;">
+<input id="prefix-count" type="number" value="10" min="1" max="100" style="width:120px;">
+<button class="btn" onclick="toolGenerateSelected()">按勾选生成</button>
+</div>
+<div style="display:flex;gap:10px;margin-top:10px;">
+<input id="prefix-new" placeholder="自加号段（如58012）" style="flex:1;">
+<button class="btn" onclick="prefixAdd()">添加号段</button>
+</div>
+<div id="prefix-result" class="result">先勾选左侧号段</div>
+</div>
+<div class="card">
 <h2>导入号码（一行一个）</h2>
 <textarea id="imp-numbers" rows="4" placeholder="+85251234567"></textarea>
 <button class="btn" onclick="toolImport()">导入</button>
@@ -185,6 +198,28 @@ async function toolGenerate(){
   document.getElementById('gen-result').textContent =
     r.status === 200 ? ('生成'+r.data.count+'个：\\n' + r.data.data.map(x=>x.number).join('\\n')) : ('失败：'+JSON.stringify(r.data));
 }
+async function prefixLoad(){
+  const d = await jget('/api/phone/prefixes');
+  document.getElementById('prefix-list').innerHTML = (d.data||[]).map(x =>
+    '<label style="display:inline-block;margin:2px 8px 2px 0;"><input type="checkbox" class="prefix-ck" value="'+x.prefix+'"> '+x.prefix+
+    ' <span style="color:#999;">'+x.live_rate+'% ' + '★'.repeat(x.stars) + '</span></label>').join('') || '暂无';
+}
+async function toolGenerateSelected(){
+  const ps = Array.from(document.querySelectorAll('.prefix-ck:checked')).map(c=>c.value);
+  if(!ps.length){ alert('请先勾选号段'); return; }
+  const n = parseInt(document.getElementById('prefix-count').value) || 10;
+  const r = await jpost('/api/phone/generate', {count:n, prefixes:ps});
+  document.getElementById('prefix-result').textContent =
+    r.status === 200 ? ('生成'+r.data.count+'个：\\n' + r.data.data.map(x=>x.number).join('\\n')) : ('失败：'+JSON.stringify(r.data));
+}
+async function prefixAdd(){
+  const p = document.getElementById('prefix-new').value.trim();
+  if(!p) return;
+  const r = await jpost('/api/phone/prefixes', {prefix:p});
+  alert(r.data.message || r.data.detail || JSON.stringify(r.data));
+  document.getElementById('prefix-new').value = ''; prefixLoad();
+}
+prefixLoad();
 async function toolValidate(){
   const nums = document.getElementById('val-numbers').value.split('\\n').map(s=>s.trim()).filter(Boolean);
   if(!nums.length){ alert('请先填写号码'); return; }

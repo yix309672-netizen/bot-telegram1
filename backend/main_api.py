@@ -31,7 +31,7 @@ if __package__ in (None, ""):
     # 目录方式运行（Docker WORKDIR /app 内 uvicorn main_api:app）
     from core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
     from core.database import SystemConfig, UploadFile as UploadFileRecord, AdminUser, MallCate, MallGoods
-    from core.database import BotInstance
+    from core.database import BotInstance, PhonePrefix
     from core.jwt_manager import JWTManager
     from core.cache import cache, is_redis_live
     from core.security import SecurityUtils
@@ -43,7 +43,7 @@ else:
     # 包方式运行（pytest / uvicorn backend.main_api:app）
     from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
     from .core.database import SystemConfig, UploadFile as UploadFileRecord, AdminUser, MallCate, MallGoods
-    from .core.database import BotInstance
+    from .core.database import BotInstance, PhonePrefix
     from .core.jwt_manager import JWTManager
     from .core.cache import cache, is_redis_live
     from .core.security import SecurityUtils
@@ -340,6 +340,7 @@ class BackupPayload(BaseModel):
 
 class PhoneGenerateRequest(BaseModel):
     count: int = 1
+    prefixes: List[str] = []
 
 class ValidatePhoneRequest(BaseModel):
     numbers: List[str]
@@ -353,12 +354,27 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
-def generate_hk_number():
+def generate_hk_number(prefix: str = ""):
     import random
+    if prefix:
+        # 定向号段：前缀 + 随机后缀凑8位
+        rest = 8 - len(prefix)
+        suffix = ''.join([str(random.randint(0, 9)) for _ in range(rest)])
+        return f"+852{prefix}{suffix}"
     prefixes = ['5', '6', '9']
     prefix = random.choice(prefixes)
     number = ''.join([str(random.randint(0, 9)) for _ in range(7)])
     return f"+852{prefix}{number}"
+
+
+def _clean_prefix(raw: str) -> str:
+    # 号段归一：纯数字、1-7位、首位5/6/9（香港移动号段）
+    p = raw.strip().lstrip("+")
+    if p.startswith("852"):
+        p = p[3:]
+    if not p.isdigit() or not (1 <= len(p) <= 7) or p[0] not in "569":
+        raise HTTPException(status_code=422, detail=f"号段非法：{raw}")
+    return p
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(f"{password}{SECRET_KEY}".encode()).hexdigest()
@@ -917,12 +933,15 @@ async def import_backup_json(payload: BackupPayload, _: bool = Depends(verify_ap
 @app.post('/api/phone/generate')
 def generate_phone(request: PhoneGenerateRequest, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
     count = min(max(request.count, 1), 100)
+    # 定向号段（逐个校验），不传则随机
+    wanted = [_clean_prefix(p) for p in (request.prefixes or [])]
+    import random as _random
     generated = []
     attempts = 0
-    while len(generated) < count and attempts < count * 10:
-        # 随机号入库，撞唯一键则重试
+    while len(generated) < count and attempts < count * 10 + 20:
         attempts += 1
-        phone = generate_hk_number()
+        pre = _random.choice(wanted) if wanted else ""
+        phone = generate_hk_number(pre)
         row = PhoneNumber(number=phone, country="HK", status="generated", is_valid=False)
         db.add(row)
         try:
@@ -934,6 +953,43 @@ def generate_phone(request: PhoneGenerateRequest, db: Session = Depends(get_db),
             continue
     logger.info(f"生成号码数量: {len(generated)}")
     return {'message': '生成成功', 'data': generated, 'count': len(generated)}
+
+
+class PrefixIn(BaseModel):
+    prefix: str
+    live_rate: int = 0
+    stars: int = 0
+    remark: str = ""
+
+
+@app.get('/api/phone/prefixes')
+def list_prefixes(db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    rows = db.query(PhonePrefix).order_by(PhonePrefix.live_rate.desc(), PhonePrefix.prefix).all()
+    return {'data': [{'id': r.id, 'prefix': r.prefix, 'live_rate': r.live_rate,
+                      'stars': r.stars, 'remark': r.remark} for r in rows]}
+
+
+@app.post('/api/phone/prefixes')
+def add_prefix(body: PrefixIn, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    p = _clean_prefix(body.prefix)
+    if db.query(PhonePrefix).filter(PhonePrefix.prefix == p).first():
+        raise HTTPException(status_code=409, detail="号段已存在")
+    row = PhonePrefix(prefix=p, live_rate=max(0, min(body.live_rate, 100)),
+                      stars=max(0, min(body.stars, 5)), remark=body.remark[:255])
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {'message': '添加成功', 'id': row.id}
+
+
+@app.delete('/api/phone/prefixes/{pid}')
+def del_prefix(pid: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(PhonePrefix).filter(PhonePrefix.id == pid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="号段不存在")
+    db.delete(row)
+    db.commit()
+    return {'message': '删除成功'}
 
 @app.post('/api/phone/validate')
 def validate_phone(request: ValidatePhoneRequest, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
