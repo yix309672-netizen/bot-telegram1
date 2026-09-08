@@ -57,7 +57,7 @@ def test_backups_page_has_download():
 
 
 def test_bundle_requires_login_and_valid_phone():
-    assert client.get('/api/backup/bundle/66989453470').status_code == 401
+    assert TestClient(app).get('/api/backup/bundle/66989453470').status_code == 401
     login = client.post('/admin/login', data={'username': 'admin', 'password': 'admin123'})
     ck = {'access_token': login.cookies.get('access_token')}
     c2 = TestClient(app)
