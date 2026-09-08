@@ -37,7 +37,7 @@ if __package__ in (None, ""):
     from core.crypto import PasswordManager
     from display_pages import html_phones, html_sms, render_backups_page
     from monitor_console import html_console
-    from ops_pages import html_bot, html_phone_tool
+    from ops_pages import html_bot, html_phone_tool, html_convert, html_system, html_mall, html_desktop
 else:
     # 包方式运行（pytest / uvicorn backend.main_api:app）
     from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
@@ -48,7 +48,7 @@ else:
     from .core.crypto import PasswordManager
     from .display_pages import html_phones, html_sms, render_backups_page
     from .monitor_console import html_console
-    from .ops_pages import html_bot, html_phone_tool
+    from .ops_pages import html_bot, html_phone_tool, html_convert, html_system, html_mall, html_desktop
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -470,24 +470,18 @@ ADMIN_SHELL = """
   <div class="wrap">
     <div class="sidebar">
       <div class="side-group">监控</div>
-      <button data-src="/admin/console#top" class="active">📊 监控总览</button>
-      <button data-src="/admin/console#smsqueue">📨 短信队列</button>
+      <button data-src="/admin/console">📊 监控总览</button>
       <div class="side-group">操作</div>
       <button data-src="/admin/bot">🤖 BOT控制台</button>
-      <button data-src="/admin/phone-tool">📱 生成验证号码</button>
-      <button data-src="/admin/console#ops">⚡ 快捷操作</button>
-      <button data-src="/admin/console#convert">🔄 转换测试</button>
+      <button data-src="/admin/phone-tool">📱 生成验证导入</button>
+      <button data-src="/admin/sms">💬 短信管理</button>
+      <button data-src="/admin/convert">🔄 转换测试</button>
       <div class="side-group">管理</div>
       <button data-src="/admin/phones">📱 号码管理</button>
-      <button data-src="/admin/sms">💬 短信记录</button>
       <button data-src="/admin/backups">📦 备份管理</button>
-      <button data-src="/admin/console#cfg">⚙️ 系统配置</button>
-      <button data-src="/admin/console#upload">📤 文件上传</button>
-      <button data-src="/admin/console#users">👥 账号管理</button>
-      <button data-src="/admin/console#botlog">📜 机器人日志</button>
-      <button data-src="/admin/console#audit">📝 操作审计</button>
-      <button data-src="/admin/console#mall">🛍 商城</button>
-      <button data-src="/admin/console#tgswitch">🖥 桌面切换</button>
+      <button data-src="/admin/system">⚙️ 系统管理</button>
+      <button data-src="/admin/mall">🛍 商城</button>
+      <button data-src="/admin/desktop">🖥 桌面切换</button>
       <button data-src="/docs">📖 接口文档</button>
     </div>
     <div class="content">
@@ -495,36 +489,11 @@ ADMIN_SHELL = """
     </div>
   </div>
 <script>
-var mainframe = document.getElementById('mainframe');
-// 锚点直达：父页面直接滚iframe内元素（同源），不依赖子页自身滚动
-var anchorMap = {top:null, ops:'gen-count', convert:'conv-session', smsqueue:'sms-queue',
-  cfg:'cfg-list', upload:'up-file', users:'user-list', botlog:'bot-log',
-  audit:'audit-list', mall:'cate-list', tgswitch:'tg-list'};
-function scrollFrame(hash){
-  try {
-    var doc = mainframe.contentDocument || mainframe.contentWindow.document;
-    if (!hash || hash === 'top') { mainframe.contentWindow.scrollTo(0, 0); return; }
-    var id = anchorMap[hash];
-    if (id) { var el = doc.getElementById(id); if (el) el.scrollIntoView({block:'start'}); }
-  } catch(e){}
-}
 document.querySelectorAll('.sidebar button').forEach(function(b){
   b.addEventListener('click', function(){
     document.querySelectorAll('.sidebar button').forEach(function(x){x.classList.remove('active')});
     b.classList.add('active');
-    var src = b.getAttribute('data-src');
-    var hash = src.indexOf('#') >= 0 ? src.split('#')[1] : 'top';
-    var srcPath = src.split('#')[0];
-    var curPath = '';
-    try { curPath = new URL(mainframe.src).pathname; } catch(e){ curPath = (mainframe.src || '').split('#')[0]; }
-    if (curPath === srcPath) {
-      // 同一页只换锚点：不重载，直接滚（之前误判导致永不滚动）
-      try { mainframe.contentWindow.location.hash = hash; } catch(e){}
-      scrollFrame(hash);
-    } else {
-      mainframe.onload = function(){ setTimeout(function(){ scrollFrame(hash); }, 500); };
-      mainframe.src = src;
-    }
+    document.getElementById('mainframe').src = b.getAttribute('data-src');
   });
 });
 </script>
@@ -760,9 +729,37 @@ def admin_bot_console(request: Request):
 
 @app.get('/admin/phone-tool', response_class=HTMLResponse)
 def admin_phone_tool(request: Request):
-    # 生成验证号码单页
+    # 生成验证导入号码单页
     require_login(request)
     return HTMLResponse(html_phone_tool)
+
+
+@app.get('/admin/convert', response_class=HTMLResponse)
+def admin_convert(request: Request):
+    # 转换测试单页
+    require_login(request)
+    return HTMLResponse(html_convert)
+
+
+@app.get('/admin/system', response_class=HTMLResponse)
+def admin_system(request: Request):
+    # 系统管理单页（配置/上传/账号/审计）
+    require_login(request)
+    return HTMLResponse(html_system)
+
+
+@app.get('/admin/mall', response_class=HTMLResponse)
+def admin_mall(request: Request):
+    # 商城单页
+    require_login(request)
+    return HTMLResponse(html_mall)
+
+
+@app.get('/admin/desktop', response_class=HTMLResponse)
+def admin_desktop(request: Request):
+    # 桌面切换单页
+    require_login(request)
+    return HTMLResponse(html_desktop)
 
 
 class ToTdataBackup(BaseModel):
