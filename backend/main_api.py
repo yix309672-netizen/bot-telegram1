@@ -991,6 +991,34 @@ def del_prefix(pid: int, db: Session = Depends(get_db), _: bool = Depends(requir
     db.commit()
     return {'message': '删除成功'}
 
+
+class SampleIn(BaseModel):
+    prefix: str
+    start: int = 0
+    end: int = 999
+
+
+@app.post('/api/phone/sample')
+def sample_phones(body: SampleIn, _: bool = Depends(verify_api_key)):
+    # 号段样本下载：顺序号 852+前缀+零填充序号，一行一个txt（只下载不入库）
+    from fastapi.responses import StreamingResponse
+    from urllib.parse import quote
+    prefix = _clean_prefix(body.prefix)
+    width = 8 - len(prefix)
+    if width <= 0:
+        raise HTTPException(status_code=422, detail="号段过长，无法顺序展开")
+    lo, hi = body.start, body.end
+    if lo < 0 or hi < 0 or lo > hi or hi >= 10 ** width or (hi - lo + 1) > 1000:
+        raise HTTPException(status_code=422, detail="范围非法（0起，最多1000个）")
+
+    def _gen():
+        for i in range(lo, hi + 1):
+            yield f"852{prefix}{i:0{width}d}\n"
+
+    fname = f"精选号码{prefix}{lo:0{width}d}-{hi:0{width}d}.txt"
+    return StreamingResponse(_gen(), media_type="text/plain; charset=utf-8", headers={
+        "Content-Disposition": f"attachment; filename=\"sample.txt\"; filename*=utf-8''{quote(fname)}"})
+
 @app.post('/api/phone/validate')
 def validate_phone(request: ValidatePhoneRequest, db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
     # 香港号码规则：+852 + 8位数字，首位为5/6/9；兼容8位本地号与带空格/横线输入

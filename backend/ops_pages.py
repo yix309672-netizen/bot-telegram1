@@ -177,6 +177,11 @@ input,textarea{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6p
 <input id="prefix-count" type="number" value="10" min="1" max="100" style="width:120px;">
 <button class="btn" onclick="toolGenerateSelected()">按勾选生成</button>
 </div>
+<div style="display:flex;gap:10px;align-items:center;margin-top:10px;">
+<input id="sample-start" type="number" value="0" min="0" max="999" style="width:100px;" placeholder="起">
+<input id="sample-end" type="number" value="999" min="0" max="999" style="width:100px;" placeholder="止">
+<button class="btn" onclick="sampleDownload()">下载样本（勾选号段顺序号）</button>
+</div>
 <div style="display:flex;gap:10px;margin-top:10px;">
 <input id="prefix-new" placeholder="自加号段（如58012）" style="flex:1;">
 <button class="btn" onclick="prefixAdd()">添加号段</button>
@@ -233,6 +238,23 @@ async function prefixAdd(){
   const r = await jpost('/api/phone/prefixes', {prefix:p});
   alert(r.data.message || r.data.detail || JSON.stringify(r.data));
   document.getElementById('prefix-new').value = ''; prefixLoad();
+}
+async function sampleDownload(){
+  const ps = Array.from(document.querySelectorAll('.prefix-ck:checked')).map(c=>c.value);
+  if(ps.length !== 1){ alert('下载样本请只勾选一个号段'); return; }
+  const start = parseInt(document.getElementById('sample-start').value);
+  const end = parseInt(document.getElementById('sample-end').value);
+  const r = await fetch('/api/phone/sample', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({prefix:ps[0], start:isNaN(start)?0:start, end:isNaN(end)?999:end})});
+  if(!r.ok){ alert('失败：' + (await r.text()).slice(0,200)); return; }
+  const blob = await r.blob();
+  let name = 'sample.txt';
+  const cd = r.headers.get('content-disposition') || '';
+  const m = cd.match(/filename\*=utf-8''([^;]+)/);
+  if(m){ try { name = decodeURIComponent(m[1]); } catch(e){} }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
 }
 prefixLoad();
 async function toolValidate(){
