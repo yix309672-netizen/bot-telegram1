@@ -1003,7 +1003,11 @@ def start_bot(_: bool = Depends(require_admin_or_key)):
             return {'message': '未找到 bot.py（可用 BOT_SCRIPT 环境变量指定）', 'status': 'error'}
         if not bot_cwd:
             bot_cwd = os.path.dirname(bot_script)
-        bot_process = subprocess.Popen([sys.executable, bot_script], cwd=bot_cwd)
+        # 输出重定向到 bot.log，否则崩溃原因无处可查（机器人日志页读此文件）
+        log_path = os.path.join(bot_cwd, "bot.log")
+        log_fp = open(log_path, "a", encoding="utf-8")
+        bot_process = subprocess.Popen([sys.executable, "-u", bot_script], cwd=bot_cwd,
+                                       stdout=log_fp, stderr=subprocess.STDOUT, close_fds=True)
         return {'message': 'Bot started successfully', 'status': 'running'}
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
