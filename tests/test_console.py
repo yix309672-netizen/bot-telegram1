@@ -1,5 +1,5 @@
 # coding=utf-8
-"""统一监控台测试：页面元素 + 权限 + 聚合接口"""
+"""统一监控台测试：纯仪表盘（操作区已迁独立页）+ 权限 + 聚合接口"""
 from fastapi.testclient import TestClient
 from backend.main_api import app
 
@@ -9,8 +9,10 @@ client = TestClient(app)
 def test_console_public():
     r = client.get('/console')
     assert r.status_code == 200
-    for needle in ('实时监控台', 'm-phones', 'logstream', 'opGenerate', 'opConvert'):
+    for needle in ('实时监控台', 'm-phones', 'logstream', 'req-total'):
         assert needle in r.text
+    for gone in ('opGenerate', 'opConvert', 'cfgSave', 'userAdd', 'mallLoad', 'tgSwitch'):
+        assert gone not in r.text
 
 
 def test_console_admin_requires_login():

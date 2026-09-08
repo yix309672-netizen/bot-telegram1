@@ -242,6 +242,7 @@ html_sms = '''
             <option value="sent">已发送</option>
             <option value="failed">失败</option>
         </select>
+        <span id="smsQueue" style="align-self:center;color:#666;font-size:14px;"></span>
         </div>
         <div class="card" style="margin-top:20px">
             <table>
@@ -281,6 +282,12 @@ html_sms = '''
                 const res = await fetch(API_BASE + '/api/sms/list' + (status ? '?status=' + status : ''));
                 const data = await res.json();
                 renderTable(data.data || []);
+                try {
+                    const ov = await (await fetch(API_BASE + '/api/metrics/overview')).json();
+                    const q = ov.sms_queue || {};
+                    document.getElementById('smsQueue').textContent =
+                        '排队 ' + (q.queued||0) + ' · 投递中 ' + (q.sending||0) + ' · 成功 ' + (q.sent||0) + ' · 失败 ' + (q.failed||0);
+                } catch(e) {}
             } catch(e) {
                 document.getElementById('smsTable').innerHTML = '<tr><td colspan="7" style="text-align:center;color:#dc2626;">加载失败：后端可能未启动或未登录</td></tr>';
             }
