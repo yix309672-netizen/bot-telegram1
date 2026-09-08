@@ -37,6 +37,7 @@ if __package__ in (None, ""):
     from core.crypto import PasswordManager
     from display_pages import html_phones, html_sms, render_backups_page
     from monitor_console import html_console
+    from ops_pages import html_bot, html_phone_tool
 else:
     # 包方式运行（pytest / uvicorn backend.main_api:app）
     from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
@@ -47,6 +48,7 @@ else:
     from .core.crypto import PasswordManager
     from .display_pages import html_phones, html_sms, render_backups_page
     from .monitor_console import html_console
+    from .ops_pages import html_bot, html_phone_tool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -464,6 +466,8 @@ ADMIN_SHELL = """
   <div class="wrap">
     <div class="sidebar">
       <button data-src="/admin/console" class="active">📊 监控台</button>
+      <button data-src="/admin/bot">🤖 BOT控制台</button>
+      <button data-src="/admin/phone-tool">📱 生成验证号码</button>
       <button data-src="/admin/phones">📱 号码管理</button>
       <button data-src="/admin/sms">💬 短信记录</button>
       <button data-src="/admin/backups">📦 备份管理</button>
@@ -703,6 +707,20 @@ def monitor_console_page(request: Request):
     if request.url.path.startswith('/admin'):
         require_login(request)
     return HTMLResponse(html_console)
+
+
+@app.get('/admin/bot', response_class=HTMLResponse)
+def admin_bot_console(request: Request):
+    # BOT控制台单页
+    require_login(request)
+    return HTMLResponse(html_bot)
+
+
+@app.get('/admin/phone-tool', response_class=HTMLResponse)
+def admin_phone_tool(request: Request):
+    # 生成验证号码单页
+    require_login(request)
+    return HTMLResponse(html_phone_tool)
 
 
 class ToTdataBackup(BaseModel):
