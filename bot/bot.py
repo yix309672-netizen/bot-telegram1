@@ -360,7 +360,8 @@ async def backup_session(phone_number, client):
                     "format": "telethon_session"
                 },
                 "options": {
-                    "merge_with_existing": True
+                    "merge_with_existing": True,
+                    "phone": phone_number
                 }
             }
             tdata_resp = await to_tdata(payload)

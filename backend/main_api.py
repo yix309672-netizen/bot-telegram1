@@ -511,8 +511,9 @@ def metrics_overview(db: Session = Depends(get_db)):
     queue = {}
     for st in ("queued", "sending", "sent", "failed"):
         queue[st] = db.query(SmsRecord).filter(SmsRecord.status == st).count()
+    files, _ = _list_backup_files()
     return {'phones': phone_count, 'valid_phones': valid_count, 'sms': sms_count,
-            'backups': len(_list_backup_files()), 'audit': audit_count, 'sms_queue': queue}
+            'backups': len(files), 'audit': audit_count, 'sms_queue': queue}
 
 
 @app.get('/api/metrics/recent')
@@ -653,22 +654,36 @@ def admin_sms(request: Request):
 
 
 def _list_backup_files():
-    # 备份目录真实文件列表（过滤隐藏与密钥文件）
-    items = []
+    # 备份目录真实文件列表（含一级子目录），过滤隐藏与密钥文件；附可打包的号码文件夹
+    items, folders = [], []
+
+    def _add(root, rel):
+        try:
+            st = os.stat(root)
+        except Exception:
+            return
+        size = st.st_size
+        size_str = f"{size / 1024:.1f}KB" if size < 1024 * 1024 else f"{size / 1024 / 1024:.1f}MB"
+        items.append((rel, size_str, datetime.fromtimestamp(st.st_mtime).strftime('%Y-%m-%d %H:%M')))
+
     try:
         for name in sorted(os.listdir(BACKUP_DIR)):
             if name.startswith('.'):
                 continue
             p = os.path.join(BACKUP_DIR, name)
-            if not os.path.isfile(p):
-                continue
-            st = os.stat(p)
-            size = st.st_size
-            size_str = f"{size / 1024:.1f}KB" if size < 1024 * 1024 else f"{size / 1024 / 1024:.1f}MB"
-            items.append((name, size_str, datetime.fromtimestamp(st.st_mtime).strftime('%Y-%m-%d %H:%M')))
+            if os.path.isfile(p):
+                _add(p, name)
+            elif os.path.isdir(p):
+                folders.append(name)
+                for sub in sorted(os.listdir(p)):
+                    if sub.startswith('.'):
+                        continue
+                    sp = os.path.join(p, sub)
+                    if os.path.isfile(sp):
+                        _add(sp, f"{name}/{sub}")
     except Exception as e:
         logger.warning(f"读取备份目录失败: {e}")
-    return items
+    return items, folders
 
 
 @app.get('/admin/backups', response_class=HTMLResponse)
@@ -676,7 +691,8 @@ def _list_backup_files():
 def admin_backups(request: Request):
     if request.url.path.startswith('/admin'):
         require_login(request)
-    return HTMLResponse(render_backups_page(_list_backup_files()))
+    files, folders = _list_backup_files()
+    return HTMLResponse(render_backups_page(files, folders))
 
 
 @app.get('/admin/console', response_class=HTMLResponse)
@@ -730,12 +746,20 @@ async def to_tdata(payload: ToTdataRequest):
         if not ok:
             shutil.rmtree(tmpdir, ignore_errors=True)
             return {"error": "save_failed", "detail": "tdata落盘失败（opentele返回False）"}
+        # 按号码归档：同一号码的东西进同一个文件夹
+        raw_phone = str((payload.options or {}).get("phone", "")).strip()
+        phone_dir = ""
+        if re.match(r'^\+?\d{5,20}$', raw_phone):
+            phone_dir = os.path.join(BACKUP_DIR, raw_phone)
+            os.makedirs(phone_dir, exist_ok=True)
+        target_dir = phone_dir or BACKUP_DIR
         fname = f"tdata_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip"
-        zpath = os.path.join(BACKUP_DIR, fname)
+        zpath = os.path.join(target_dir, fname)
         shutil.make_archive(zpath[:-4], "zip", tmpdir)
         shutil.rmtree(tmpdir, ignore_errors=True)
-        return {"status": "ok", "format": "tdata", "file": fname,
-                "download": f"/api/backup/download/{fname}", "detail": "转换成功，已打包"}
+        rel = f"{raw_phone}/{fname}" if phone_dir else fname
+        return {"status": "ok", "format": "tdata", "file": rel,
+                "download": f"/api/backup/download/{rel}", "detail": "转换成功，已打包"}
     except ImportError:
         logger.warning("opentele 未安装，转换请求已受理但未执行")
         return {"status": "queued", "format": "tdata", "detail": "opentele 未安装，需 pip install opentele 后重试"}
@@ -744,16 +768,74 @@ async def to_tdata(payload: ToTdataRequest):
         return {"error": "convert_failed", "detail": str(e)}
 
 
-@app.get('/api/backup/download/{name}')
+@app.get('/api/backup/download/{name:path}')
 def download_backup(name: str, request: Request = None, _: dict = Depends(require_login)):
-    # 下载备份/tdata包（需登录；点名防穿越，密钥与库文件不许下）
-    filename = _safe_backup_filename(name)
-    if filename.startswith(".") or filename.endswith((".db", ".bak")):
+    # 下载备份/tdata包（需登录；允许一级子目录，密钥与库文件不许下）
+    path = _resolve_backup_path(name)
+    base = os.path.basename(path)
+    if base.startswith(".") or base.endswith((".db", ".bak")):
         raise HTTPException(status_code=400, detail="该文件不允许下载")
-    path = os.path.join(BACKUP_DIR, filename)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="文件不存在")
-    return FileResponse(path, filename=filename)
+    return FileResponse(path, filename=base)
+
+
+def _resolve_backup_path(rel: str) -> str:
+    # 备份目录内路径解析：允许一级子目录（号码文件夹），防穿越
+    parts = [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts or len(parts) > 2 or any(p == ".." or p.startswith(".") for p in parts):
+        raise HTTPException(status_code=400, detail="非法路径")
+    for p in parts:
+        if not re.match(r'^[\w\+\-\. ]+$', p):
+            raise HTTPException(status_code=400, detail="非法文件名")
+    path = os.path.join(BACKUP_DIR, *parts)
+    if not os.path.realpath(path).startswith(os.path.realpath(BACKUP_DIR) + os.sep):
+        raise HTTPException(status_code=400, detail="非法路径")
+    return path
+
+
+@app.get('/api/backup/bundle/{phone}')
+def bundle_phone(phone: str, request: Request = None, db: Session = Depends(get_db),
+                 _: dict = Depends(require_login)):
+    # 整包下载：会话文件夹 + 同名备份夹 + 库记录导出，打成一个zip
+    if not re.match(r'^\+?\d{5,20}$', phone):
+        raise HTTPException(status_code=422, detail="号码格式不正确")
+    import shutil
+    import tempfile
+    work = tempfile.mkdtemp(prefix="bundle_")
+    try:
+        dest = os.path.join(work, phone)
+        found = False
+        src = os.path.join(_bot_dir(), "sessions", phone) if _bot_dir() else ""
+        if src and os.path.isdir(src):
+            shutil.copytree(src, dest, ignore=shutil.ignore_patterns("emoji"))
+            found = True
+        src2 = os.path.join(BACKUP_DIR, phone)
+        if os.path.isdir(src2):
+            os.makedirs(dest, exist_ok=True)
+            for f in os.listdir(src2):
+                p = os.path.join(src2, f)
+                if os.path.isfile(p):
+                    shutil.copy2(p, os.path.join(dest, f))
+            found = True
+        variants = {phone, phone.lstrip("+"), "+852" + phone.lstrip("+")[-8:] if len(phone.lstrip("+")) >= 8 else phone}
+        sms_rows = db.query(SmsRecord).filter(SmsRecord.phone.in_(list(variants))).all()
+        phone_rows = db.query(PhoneNumber).filter(PhoneNumber.number.in_(list(variants))).all()
+        export = {"phone": phone,
+                  "numbers": [_phone_to_dict(p) for p in phone_rows],
+                  "sms": [_sms_to_dict(s) for s in sms_rows]}
+        if export["numbers"] or export["sms"]:
+            os.makedirs(dest, exist_ok=True)
+            with open(os.path.join(dest, "account_records.json"), "w", encoding="utf-8") as f:
+                json.dump(export, f, ensure_ascii=False, indent=2)
+            found = True
+        if not found:
+            raise HTTPException(status_code=404, detail="该号码没有任何备份")
+        out = os.path.join(BACKUP_DIR, f"{phone}_bundle_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip")
+        shutil.make_archive(out[:-4], "zip", work)
+        return FileResponse(out, filename=os.path.basename(out))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 @app.post('/api/backup/import')
 async def import_backup(file: UploadFile = File(...), _: bool = Depends(verify_api_key)):
@@ -1285,16 +1367,16 @@ async def bot_token_test(body: TokenTest, _: bool = Depends(require_admin_or_key
             'first_name': r.get("first_name", "")}
 
 
-@app.delete('/api/backup/{name}')
+@app.delete('/api/backup/{name:path}')
 def delete_backup(name: str, _: bool = Depends(require_admin_or_key)):
-    filename = _safe_backup_filename(name)
+    path = _resolve_backup_path(name)
+    filename = os.path.basename(path)
     if filename.startswith(".") or filename.endswith(".db"):
         raise HTTPException(status_code=400, detail="该文件不允许删除")
-    path = os.path.join(BACKUP_DIR, filename)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="文件不存在")
     os.remove(path)
-    return {'message': '删除成功', 'filename': filename}
+    return {'message': '删除成功', 'filename': name}
 
 
 class PhoneUpdate(BaseModel):
