@@ -184,6 +184,7 @@ input,textarea{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6p
 </div>
 </div>
 <script>
+async function jget(url){ const r = await fetch(url); return r.json(); }
 async function jpost(url, body){
   try {
     const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
