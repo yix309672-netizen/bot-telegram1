@@ -165,7 +165,14 @@ input,textarea{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6p
 </div>
 <div class="card">
 <h2>香港号段定向生成（勾选+数量）</h2>
-<div id="prefix-list" style="font-family:monospace;font-size:13px;max-height:220px;overflow:auto;margin-bottom:10px;"></div>
+<table style="width:100%;border-collapse:collapse;font-size:14px;">
+<thead><tr style="background:#f9fafb;color:#6b7280;">
+<th style="padding:10px;text-align:left;"><input type="checkbox" id="prefix-all" onchange="prefixToggleAll(this.checked)"> 全选</th>
+<th style="padding:10px;text-align:left;">号段</th><th style="padding:10px;text-align:left;">实号</th>
+<th style="padding:10px;text-align:left;">推荐度</th><th style="padding:10px;text-align:left;">备注</th>
+</tr></thead>
+<tbody id="prefix-list"></tbody>
+</table>
 <div style="display:flex;gap:10px;align-items:center;">
 <input id="prefix-count" type="number" value="10" min="1" max="100" style="width:120px;">
 <button class="btn" onclick="toolGenerateSelected()">按勾选生成</button>
@@ -202,8 +209,15 @@ async function toolGenerate(){
 async function prefixLoad(){
   const d = await jget('/api/phone/prefixes');
   document.getElementById('prefix-list').innerHTML = (d.data||[]).map(x =>
-    '<label style="display:inline-block;margin:2px 8px 2px 0;"><input type="checkbox" class="prefix-ck" value="'+x.prefix+'"> '+x.prefix+
-    ' <span style="color:#999;">'+x.live_rate+'% ' + '★'.repeat(x.stars) + '</span></label>').join('') || '暂无';
+    '<tr style="border-top:1px solid #e5e7eb;">' +
+    '<td style="padding:10px;"><input type="checkbox" class="prefix-ck" value="'+x.prefix+'"></td>' +
+    '<td style="padding:10px;font-family:monospace;">'+x.prefix+'</td>' +
+    '<td style="padding:10px;">'+x.live_rate+'%</td>' +
+    '<td style="padding:10px;color:#f59e0b;">'+'★'.repeat(x.stars)+'<span style="color:#e5e7eb;">'+'★'.repeat(Math.max(0,5-x.stars))+'</span></td>' +
+    '<td style="padding:10px;color:#999;">'+(x.remark||'')+'</td></tr>').join('') || '<tr><td colspan="5">暂无</td></tr>';
+}
+function prefixToggleAll(on){
+  document.querySelectorAll('.prefix-ck').forEach(c=>{c.checked=on;});
 }
 async function toolGenerateSelected(){
   const ps = Array.from(document.querySelectorAll('.prefix-ck:checked')).map(c=>c.value);
