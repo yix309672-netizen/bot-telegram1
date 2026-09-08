@@ -151,6 +151,7 @@ docker-compose down
 | 短信记录 | /admin/sms · /sms |
 | 备份管理 | /admin/backups · /backups |
 | 实时监控台 | /admin/console · /console |
+| BOT控制台（多实例） | /admin/bot |
 
 实时监控台（UI 改编自 joshhu/uitest #31，MIT）：指标卡/请求图表/日志流/服务健康
 3 秒轮询，外加生成/验证/导入/短信/机器人启停/转换测试六组快捷操作。
@@ -161,6 +162,11 @@ docker-compose down
 - 命令行：`python scripts/switch_telegram.py --list` 查看，`python scripts/switch_telegram.py <号码>` 切换
 - 网页：监控台“桌面多号切换”卡一键切换；接口 `/api/telegram/accounts` + `/api/telegram/switch`（需管理员）
 - 切换自动备份当前上线号（`live_backup_*.zip`），tdata 优先用完整目录、其次转换包
+
+## 多机器人并行（最多10个）
+
+BOT控制台页点“添加机器人”即多一张凭证卡（token/ID/HASH各存各的），每卡独立启动/停止/测试/日志/删除；
+旧单机接口（`/api/bot/start|stop|status|log`）自动转调默认实例；接口 `/api/bots` 全套CRUD。
 
 ## R2：PHP后台已迁移（admin/ 退役）
 

@@ -22,7 +22,7 @@ def test_ops_pages_content():
     ck = _ck()
     c2 = TestClient(app)
     b = c2.get('/admin/bot', cookies=ck).text
-    assert 'botRefresh' in b and 'envSave' in b and 'tokenTest' in b
+    assert 'bot-grid' in b and 'botAdd' in b and 'botStart' in b and 'botDel' in b and 'botLog' in b
     p = c2.get('/admin/phone-tool', cookies=ck).text
     assert 'toolGenerate' in p and 'toolValidate' in p and 'toolImport' in p
     assert 'convGo' in c2.get('/admin/convert', cookies=ck).text

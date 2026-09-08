@@ -31,6 +31,7 @@ if __package__ in (None, ""):
     # 目录方式运行（Docker WORKDIR /app 内 uvicorn main_api:app）
     from core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
     from core.database import SystemConfig, UploadFile as UploadFileRecord, AdminUser, MallCate, MallGoods
+    from core.database import BotInstance
     from core.jwt_manager import JWTManager
     from core.cache import cache, is_redis_live
     from core.security import SecurityUtils
@@ -42,6 +43,7 @@ else:
     # 包方式运行（pytest / uvicorn backend.main_api:app）
     from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
     from .core.database import SystemConfig, UploadFile as UploadFileRecord, AdminUser, MallCate, MallGoods
+    from .core.database import BotInstance
     from .core.jwt_manager import JWTManager
     from .core.cache import cache, is_redis_live
     from .core.security import SecurityUtils
@@ -257,8 +259,7 @@ def _clear_login_fail(ip: str) -> None:
     except Exception:
         pass
 
-# Bot process reference
-bot_process = None
+# Bot process reference（多实例注册表见下方 bot_processes，单机全局已废弃）
 
 def verify_api_key(request: Request, x_api_key: Optional[str] = Header(None)):
     if not ENABLE_AUTH:
@@ -545,9 +546,10 @@ def metrics_recent():
 
 
 @app.get('/api/system/status')
-def system_status():
+def system_status(db: Session = Depends(get_db)):
     # 监控台服务健康：各依赖真实探活（公开只读）
-    bot_alive = bot_process is not None and bot_process.poll() is None
+    total = db.query(BotInstance).count()
+    running = sum(1 for iid in list(bot_processes) if _bot_alive(iid))
     try:
         from opentele.td import TDesktop  # noqa
         opentele_ok = True
@@ -557,7 +559,8 @@ def system_status():
         'backend': {'ok': True, 'label': '统一后端:8000'},
         'database': {'ok': True, 'label': 'SQLite' if DATABASE_URL.startswith('sqlite') else 'MySQL'},
         'redis': {'ok': is_redis_live(), 'label': 'Redis' if is_redis_live() else '内存降级'},
-        'bot': {'ok': bot_alive, 'label': '机器人运行中' if bot_alive else '机器人未运行'},
+        'bot': {'ok': running > 0 if total else True,
+                'label': f'机器人{running}/{total}运行中' if total else '机器人未配置'},
         'converter': {'ok': opentele_ok, 'label': '转换可用' if opentele_ok else '转换降级'},
     }
 
@@ -585,6 +588,7 @@ def api_root():    return {
             '/api/bot/log',
             '/api/bot/token',
             '/api/bot/env',
+            '/api/bots',
             '/api/users',
             '/api/mall/cate',
             '/api/mall/goods',
@@ -1116,69 +1120,38 @@ def requeue_sms(sms_id: int, db: Session = Depends(get_db), _: bool = Depends(re
     return {'message': '已重发（回队列）', 'data': _sms_to_dict(row)}
 
 @app.get('/api/bot/status')
-def get_bot_status():
-    global bot_process
-    is_running = False
-    if bot_process is not None:
-        if bot_process.poll() is None:
-            is_running = True
-    return {'status': 'running' if is_running else 'stopped'}
+def get_bot_status(db: Session = Depends(get_db)):
+    # 兼容旧接口：返回默认实例状态
+    row = _default_bot(db)
+    if not row:
+        return {'status': 'stopped'}
+    return {'status': 'running' if _bot_alive(row.id) else 'stopped'}
 
 @app.post('/api/bot/start')
-def start_bot(_: bool = Depends(require_admin_or_key)):
-    global bot_process
-    if bot_process is not None and bot_process.poll() is None:
+def start_bot(db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    # 兼容旧接口：启动默认实例
+    row = _default_bot(db)
+    if not row:
+        return {'message': '没有任何机器人实例，请先添加', 'status': 'error'}
+    if _bot_alive(row.id):
         return {'message': 'Bot is already running', 'status': 'running'}
     try:
-        # 路径解析：环境变量优先，其次按项目结构自动定位（兼容Windows本地与Docker）
-        bot_script = os.getenv("BOT_SCRIPT", "")
-        bot_cwd = os.getenv("BOT_WORKDIR", "")
-        if not bot_script or not os.path.isfile(bot_script):
-            here = os.path.dirname(os.path.abspath(__file__))
-            candidates = [
-                os.path.join(here, "..", "bot", "bot.py"),
-                os.path.join(os.getcwd(), "bot", "bot.py"),
-                os.path.join("/app", "bot", "bot.py"),
-            ]
-            for c in candidates:
-                if os.path.isfile(c):
-                    bot_script = os.path.normpath(c)
-                    bot_cwd = os.path.normpath(os.path.dirname(c))
-                    break
-        if not bot_script or not os.path.isfile(bot_script):
-            return {'message': '未找到 bot.py（可用 BOT_SCRIPT 环境变量指定）', 'status': 'error'}
-        if not bot_cwd:
-            bot_cwd = os.path.dirname(bot_script)
-        # 子进程环境必须剔除机器人三件套：根.env 的旧值会透过继承盖掉 bot/.env，
-        # 且 load_dotenv 默认不覆盖已有变量（此前死 token 阴魂不散的根因）
-        child_env = {k: v for k, v in os.environ.items()
-                     if k not in ("BOT_TOKEN", "API_ID", "API_HASH")}
-        # 输出重定向到 bot.log，否则崩溃原因无处可查（机器人日志页读此文件）
-        log_path = os.path.join(bot_cwd, "bot.log")
-        log_fp = open(log_path, "a", encoding="utf-8")
-        bot_process = subprocess.Popen([sys.executable, "-u", bot_script], cwd=bot_cwd,
-                                       stdout=log_fp, stderr=subprocess.STDOUT, close_fds=True,
-                                       env=child_env)
+        _spawn_bot(row, _bot_log_file(row.id, is_default=True))
         return {'message': 'Bot started successfully', 'status': 'running'}
+    except HTTPException as e:
+        return {'message': e.detail, 'status': 'error'}
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         return {'message': f'Failed to start bot: {str(e)}', 'status': 'error'}
 
 @app.post('/api/bot/stop')
-def stop_bot(_: bool = Depends(require_admin_or_key)):
-    global bot_process
-    if bot_process is None or bot_process.poll() is not None:
-        return {'message': 'Bot is not running', 'status': 'stopped'}
-    try:
-        bot_process.terminate()
-        bot_process.wait(timeout=5)
+def stop_bot(db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    # 兼容旧接口：停止默认实例
+    row = _default_bot(db)
+    if row:
+        _stop_proc(row.id)
         return {'message': 'Bot stopped successfully', 'status': 'stopped'}
-    except Exception as e:
-        logger.error(f"Failed to stop bot: {e}")
-        # Force kill if terminate fails
-        if bot_process:
-            bot_process.kill()
-        return {'message': 'Bot stopped forcefully', 'status': 'stopped'}
+    return {'message': 'Bot is not running', 'status': 'stopped'}
 
 # ================= R2：PHP后台迁移接口（配置/上传/审计/机器人/账号/商城） =================
 
@@ -1264,12 +1237,19 @@ def _bot_dir() -> str:
 
 
 @app.get('/api/bot/log')
-def bot_log(num: int = 200, request: Request = None, _: dict = Depends(require_login)):
+def bot_log(num: int = 200, request: Request = None, db: Session = Depends(get_db),
+            _: dict = Depends(require_login)):
+    # 兼容旧接口：读默认实例日志（含历史 bot.log/bot-err.log）
     num = min(max(num, 1), 2000)
     content = []
+    row = _default_bot(db)
+    files = []
+    if row:
+        files.append(_bot_log_file(row.id, is_default=True))
     d = _bot_dir()
-    for name in ("bot.log", "bot-err.log"):
-        p = os.path.join(d, name) if d else ""
+    if d:
+        files.append(os.path.join(d, "bot-err.log"))
+    for p in files:
         if p and os.path.isfile(p):
             try:
                 with open(p, "r", encoding="utf-8", errors="replace") as f:
@@ -1679,6 +1659,254 @@ def tg_switch(body: TgSwitch, _: bool = Depends(require_admin_or_key)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"客户端拉起失败：{e}")
     return {'message': f'已切到 {phone}', 'backup': os.path.basename(bak) if bak else ''}
+
+
+# ================= 多机器人实例（上限10个并行） =================
+MAX_BOTS = 10
+bot_processes: dict = {}
+
+
+def _default_bot(db: Session):
+    # 默认实例：id最小的；表空且文件有token则自动导入一行
+    row = db.query(BotInstance).order_by(BotInstance.id).first()
+    if row:
+        return row
+    data = _read_bot_env()
+    if data.get("BOT_TOKEN"):
+        row = BotInstance(name="默认机器人", bot_token=data.get("BOT_TOKEN", ""),
+                          api_id=data.get("API_ID", ""), api_hash=data.get("API_HASH", ""))
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+    return None
+
+
+def _bot_alive(iid: int) -> bool:
+    p = bot_processes.get(iid)
+    return p is not None and p.poll() is None
+
+
+def _bot_log_file(iid: int, is_default: bool = False) -> str:
+    d = _bot_dir()
+    if not d:
+        return ""
+    if is_default:
+        return os.path.join(d, "bot.log")
+    return os.path.join(d, f"bot_{iid}.log")
+
+
+def _resolve_bot_script():
+    # 路径解析：环境变量优先，其次按项目结构自动定位（兼容Windows本地与Docker）
+    bot_script = os.getenv("BOT_SCRIPT", "")
+    bot_cwd = os.getenv("BOT_WORKDIR", "")
+    if not bot_script or not os.path.isfile(bot_script):
+        here = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            os.path.join(here, "..", "bot", "bot.py"),
+            os.path.join(os.getcwd(), "bot", "bot.py"),
+            os.path.join("/app", "bot", "bot.py"),
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                bot_script = os.path.normpath(c)
+                bot_cwd = os.path.normpath(os.path.dirname(c))
+                break
+    if not bot_script or not os.path.isfile(bot_script):
+        return "", ""
+    if not bot_cwd:
+        bot_cwd = os.path.dirname(bot_script)
+    return bot_script, bot_cwd
+
+
+def _spawn_bot(row, log_path: str):
+    # 按实例凭证启动：环境注入（文件值为回退），输出重定向到实例日志
+    bot_script, bot_cwd = _resolve_bot_script()
+    if not bot_script:
+        raise HTTPException(status_code=500, detail="未找到 bot.py（可用 BOT_SCRIPT 环境变量指定）")
+    file_env = _read_bot_env()
+    child_env = {k: v for k, v in os.environ.items() if k not in ("BOT_TOKEN", "API_ID", "API_HASH")}
+    child_env["BOT_TOKEN"] = row.bot_token or file_env.get("BOT_TOKEN", "")
+    child_env["API_ID"] = row.api_id or file_env.get("API_ID", "")
+    child_env["API_HASH"] = row.api_hash or file_env.get("API_HASH", "")
+    if not child_env["BOT_TOKEN"]:
+        raise HTTPException(status_code=400, detail="该实例未配置TOKEN")
+    log_fp = open(log_path, "a", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, "-u", bot_script], cwd=bot_cwd,
+                            stdout=log_fp, stderr=subprocess.STDOUT, close_fds=True, env=child_env)
+    bot_processes[row.id] = proc
+    return proc
+
+
+def _stop_proc(iid: int) -> str:
+    p = bot_processes.get(iid)
+    if p is None or p.poll() is not None:
+        bot_processes.pop(iid, None)
+        return "stopped"
+    try:
+        p.terminate()
+        p.wait(timeout=5)
+    except Exception:
+        try:
+            p.kill()
+        except Exception:
+            pass
+    bot_processes.pop(iid, None)
+    return "stopped"
+
+
+def _bot_to_dict(row, is_default: bool = False) -> dict:
+    return {"id": row.id, "name": row.name or f"机器人{row.id}",
+            "bot_token_masked": _mask_token(row.bot_token or ""),
+            "api_id": row.api_id or "", "api_hash_masked": _mask_hash(row.api_hash or ""),
+            "configured": bool(row.bot_token), "running": _bot_alive(row.id),
+            "is_default": is_default}
+
+
+class BotCreate(BaseModel):
+    name: str = ""
+    bot_token: str
+    api_id: str = ""
+    api_hash: str = ""
+
+
+class BotUpdate(BaseModel):
+    name: str = None
+    bot_token: str = None
+    api_id: str = None
+    api_hash: str = None
+
+
+def _check_bot_creds(token: str, api_id: str, api_hash: str):
+    if token and not re.match(r'^\d+:[\w\-]{30,}$', token):
+        raise HTTPException(status_code=422, detail="BOT_TOKEN格式不正确（数字ID+冒号+密钥）")
+    if api_id and not re.match(r'^\d{4,12}$', api_id):
+        raise HTTPException(status_code=422, detail="API_ID应为4-12位数字")
+    if api_hash and not re.match(r'^[0-9a-fA-F]{32}$', api_hash):
+        raise HTTPException(status_code=422, detail="API_HASH应为32位十六进制")
+
+
+@app.get('/api/bots')
+def list_bots(request: Request = None, db: Session = Depends(get_db), _: dict = Depends(require_login)):
+    _default_bot(db)  # 首访自动从文件导入默认实例
+    rows = db.query(BotInstance).order_by(BotInstance.id).all()
+    default_id = rows[0].id if rows else 0
+    return {'data': [_bot_to_dict(r, r.id == default_id) for r in rows],
+            'total': len(rows), 'max': MAX_BOTS}
+
+
+@app.post('/api/bots')
+def create_bot(body: BotCreate, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    total = db.query(BotInstance).count()
+    if total >= MAX_BOTS:
+        raise HTTPException(status_code=409, detail=f"已达上限{MAX_BOTS}个")
+    token = (body.bot_token or "").strip()
+    api_id, api_hash = (body.api_id or "").strip(), (body.api_hash or "").strip()
+    if not token:
+        raise HTTPException(status_code=422, detail="BOT_TOKEN不能为空")
+    _check_bot_creds(token, api_id, api_hash)
+    row = BotInstance(name=body.name.strip() or f"机器人{total + 1}",
+                      bot_token=token, api_id=api_id, api_hash=api_hash)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {'message': '添加成功', 'data': _bot_to_dict(row, total == 0)}
+
+
+@app.put('/api/bots/{iid}')
+def update_bot(iid: int, body: BotUpdate, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(BotInstance).filter(BotInstance.id == iid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="机器人不存在")
+    if body.name is not None and body.name.strip():
+        row.name = body.name.strip()[:50]
+    if body.bot_token is not None and body.bot_token.strip():
+        _check_bot_creds(body.bot_token.strip(), "", "")
+        row.bot_token = body.bot_token.strip()
+    if body.api_id is not None and body.api_id.strip():
+        _check_bot_creds("", body.api_id.strip(), "")
+        row.api_id = body.api_id.strip()
+    if body.api_hash is not None and body.api_hash.strip():
+        _check_bot_creds("", "", body.api_hash.strip())
+        row.api_hash = body.api_hash.strip()
+    db.commit()
+    first = db.query(BotInstance).order_by(BotInstance.id).first()
+    return {'message': '保存成功，重启该机器人后生效', 'data': _bot_to_dict(row, first and first.id == row.id)}
+
+
+@app.delete('/api/bots/{iid}')
+def delete_bot(iid: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(BotInstance).filter(BotInstance.id == iid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="机器人不存在")
+    _stop_proc(iid)
+    db.delete(row)
+    db.commit()
+    return {'message': '已删除'}
+
+
+@app.post('/api/bots/{iid}/start')
+def start_bot_instance(iid: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(BotInstance).filter(BotInstance.id == iid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="机器人不存在")
+    if _bot_alive(iid):
+        return {'message': f'{row.name}已在运行中', 'status': 'running', 'id': iid}
+    first = db.query(BotInstance).order_by(BotInstance.id).first()
+    _spawn_bot(row, _bot_log_file(iid, is_default=bool(first and first.id == iid)))
+    return {'message': f'{row.name}启动成功', 'status': 'running', 'id': iid}
+
+
+@app.post('/api/bots/{iid}/stop')
+def stop_bot_instance(iid: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(BotInstance).filter(BotInstance.id == iid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="机器人不存在")
+    _stop_proc(iid)
+    return {'message': f'{row.name}已停止', 'status': 'stopped', 'id': iid}
+
+
+@app.post('/api/bots/{iid}/test')
+async def test_bot_instance(iid: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(BotInstance).filter(BotInstance.id == iid).first()
+    if not row or not row.bot_token:
+        raise HTTPException(status_code=400, detail="该实例未配置TOKEN")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"https://api.telegram.org/bot{row.bot_token}/getMe")
+            data = resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"连接Telegram失败：{e}")
+    if not data.get("ok"):
+        raise HTTPException(status_code=422, detail=data.get("description", "TOKEN无效"))
+    r = data["result"]
+    return {'id': r.get("id"), 'username': "@" + r.get("username", ""), 'first_name': r.get("first_name", "")}
+
+
+@app.get('/api/bots/{iid}/log')
+def bot_instance_log(iid: int, num: int = 200, request: Request = None,
+                     db: Session = Depends(get_db), _: dict = Depends(require_login)):
+    row = db.query(BotInstance).filter(BotInstance.id == iid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="机器人不存在")
+    num = min(max(num, 1), 2000)
+    first = db.query(BotInstance).order_by(BotInstance.id).first()
+    files = [_bot_log_file(iid, is_default=bool(first and first.id == iid))]
+    if first and first.id == iid:
+        d = _bot_dir()
+        if d:
+            files.append(os.path.join(d, "bot-err.log"))
+    content = []
+    for p in files:
+        if p and os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    content.extend(f.readlines()[-num:])
+            except Exception:
+                pass
+    if not content:
+        return {'log': '（暂无日志，该机器人尚未启动过）'}
+    return {'log': "".join(content[-num:])}
 
 
 if __name__ == "__main__":

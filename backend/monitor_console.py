@@ -106,6 +106,16 @@ html_console = """<!DOCTYPE html>
 </div>
 <div id="logstream" class="p-4 font-mono text-xs space-y-1 h-40 overflow-y-auto bg-gray-950"></div>
 </div>
+<div class="bg-gray-900 rounded-lg border border-gray-800 mt-4">
+<div class="px-4 py-3 border-b border-gray-800 flex justify-between items-center">
+<h3 class="text-sm font-semibold">BOT运行日志（默认实例）</h3>
+<div class="flex gap-2 items-center">
+<a href="/admin/bot" class="text-xs text-blue-400 hover:text-blue-300">去BOT控制台 &rarr;</a>
+<button onclick="botLogRefresh()" class="px-2 py-1 bg-gray-700 text-xs rounded cursor-pointer">刷新</button>
+</div>
+</div>
+<pre id="console-botlog" class="p-4 font-mono text-xs bg-gray-950 h-40 overflow-y-auto whitespace-pre-wrap">加载中...</pre>
+</div>
 <footer class="bg-gray-900 border-t border-gray-800 px-4 py-3 flex justify-between items-center">
 <span class="text-gray-600 text-xs">UI style adapted from joshhu/uitest #31 Real-time Monitoring (MIT)</span>
 <a href="/admin/" class="text-gray-400 hover:text-white text-sm">管理后台 &rarr;</a>
@@ -175,7 +185,14 @@ async function refreshAll(){
       || '<p class="text-gray-600">暂无日志</p>';
     document.getElementById('logstream').innerHTML = rows;
     document.getElementById('last-sync').textContent = new Date().toLocaleTimeString('zh-CN', {hour12:false});
+    botLogRefresh();
   } catch(e){ console.error(e); }
+}
+async function botLogRefresh(){
+  try {
+    const d = await jget('/api/bot/log?num=60');
+    document.getElementById('console-botlog').textContent = (d.log || JSON.stringify(d)).slice(-3000);
+  } catch(e){ document.getElementById('console-botlog').textContent = '加载失败'; }
 }
 function lines(id){ return document.getElementById(id).value.split('\\n').map(s=>s.trim()).filter(Boolean); }</script>
 </body>

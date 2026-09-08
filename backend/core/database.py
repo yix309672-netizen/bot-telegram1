@@ -104,8 +104,7 @@ class MallCate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-class MallGoods(Base):
-    # 商城商品表（原PHP mall.goods）
+class MallGoods(Base):    # 商城商品表（原PHP mall.goods）
     __tablename__ = "mall_goods"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -114,6 +113,18 @@ class MallGoods(Base):
     price: Mapped[float] = mapped_column(default=0.0)
     stock: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class BotInstance(Base):
+    # 机器人实例表：多token并行（上限10个），凭证入库不再依赖单文件
+    __tablename__ = "bot_instances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(50), default="")
+    bot_token: Mapped[str] = mapped_column(String(100), default="")
+    api_id: Mapped[str] = mapped_column(String(20), default="")
+    api_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

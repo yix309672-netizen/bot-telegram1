@@ -10,91 +10,123 @@ html_bot = """<!DOCTYPE html>
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f5f5}
 .header{background:linear-gradient(135deg,#16a34a 0%,#065f46 100%);color:white;padding:20px}
 h1{font-size:24px}
-.container{max-width:1000px;margin:20px auto;padding:0 20px}
+.container{max-width:1200px;margin:20px auto;padding:0 20px}
 .card{background:white;border-radius:12px;padding:24px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
 .btn{display:inline-block;padding:10px 20px;background:#16a34a;color:white;border:none;border-radius:6px;cursor:pointer;font-size:14px;margin-right:8px}
 .btn:hover{background:#15803d}
 .btn-danger{background:#ef4444}.btn-danger:hover{background:#dc2626}
 .btn-gray{background:#6b7280}.btn-gray:hover{background:#4b5563}
-.dot{font-size:20px}
-pre#botlog{background:#111827;color:#d1d5db;padding:12px;border-radius:8px;max-height:420px;overflow:auto;font-size:12px}
-.status-line{font-size:16px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:20px}
+.square{background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.1);min-height:360px;display:flex;flex-direction:column}
+.square h3{margin-bottom:8px}
+.square .meta{font-family:monospace;font-size:12px;color:#555;margin-bottom:6px;word-break:break-all}
+.square input{width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;margin-bottom:6px}
+.square .row{margin:8px 0}
+.square .btn{padding:8px 14px;font-size:13px;margin:0 6px 6px 0}
+.square pre{background:#111827;color:#d1d5db;padding:8px;border-radius:6px;max-height:120px;overflow:auto;font-size:11px;margin-top:8px}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;color:white}
+.badge.on{background:#16a34a}.badge.off{background:#9ca3af}
+@media(max-width:700px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-<div class="header"><h1>🤖 BOT控制台</h1></div>
+<div class="header"><h1> BOT控制台（最多10个并行）</h1></div>
 <div class="container">
 <div class="card">
-<div class="status-line"><span id="dot" class="dot">⚪</span> <span id="stext">查询中...</span></div>
-<div>
-<button class="btn" onclick="botStart()">启动 Bot</button>
-<button class="btn btn-danger" onclick="botStop()">停止 Bot</button>
-<button class="btn btn-gray" onclick="botRefresh()">刷新状态</button>
+<h2> 添加机器人</h2>
+<input id="new-name" placeholder="名称（空=自动编号）" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;">
+<input id="new-token" type="password" placeholder="BOT_TOKEN（必填）" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;">
+<input id="new-api-id" placeholder="API_ID（可空）" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;">
+<input id="new-api-hash" type="password" placeholder="API_HASH（可空）" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;">
+<div><button class="btn" onclick="botAdd()">添加</button><span id="bot-count" style="margin-left:10px;color:#666;"></span></div>
+<p id="add-result" style="font-size:13px;color:#555;margin-top:8px;"></p>
 </div>
-</div>
-<div class="card">
-<h2>机器人凭证（三件套）</h2>
-<p style="font-family:monospace;font-size:13px;color:#555;margin-bottom:8px;">TOKEN: <span id="token-masked">--</span></p>
-<p style="font-family:monospace;font-size:13px;color:#555;margin-bottom:8px;">API_ID: <span id="env-api-id">--</span> · HASH: <span id="env-api-hash">--</span></p>
-<input id="token-input" type="password" placeholder="新BOT_TOKEN（空=不改）" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;">
-<input id="env-api-id-input" placeholder="新API_ID（空=不改）" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;">
-<input id="env-api-hash-input" type="password" placeholder="新API_HASH（空=不改）" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;">
-<div>
-<button class="btn" onclick="envSave()">保存全部</button>
-<button class="btn btn-gray" onclick="tokenTest()">测试链接</button>
-</div>
-<p id="token-result" style="font-family:monospace;font-size:13px;color:#555;margin-top:8px;word-break:break-all;"></p>
-</div>
-<div class="card">
-<h2>运行日志（最新200行）</h2>
-<pre id="botlog">加载中...</pre>
-</div>
+<div id="bot-grid" class="grid"></div>
 </div>
 <script>
-async function errText(r){ const d = (r && r.data) || {}; return d.message || d.detail || JSON.stringify(d); }
-async function envLoad(){
-  const r = await fetch('/api/bot/env'); const d = await r.json();
-  document.getElementById('token-masked').textContent = d.bot_token_masked || d.detail || '--';
-  document.getElementById('env-api-id').textContent = d.api_id || '（未配置）';
-  document.getElementById('env-api-hash').textContent = d.api_hash_masked || '（未配置）';
-}
-async function envSave(){
-  const body = {bot_token: document.getElementById('token-input').value.trim(),
-    api_id: document.getElementById('env-api-id-input').value.trim(),
-    api_hash: document.getElementById('env-api-hash-input').value.trim()};
-  const r = await fetch('/api/bot/env', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  const d = await r.json();
-  document.getElementById('token-result').textContent = errText({data:d});
-  if (r.status === 200) { document.getElementById('token-input').value = ''; document.getElementById('env-api-id-input').value = ''; document.getElementById('env-api-hash-input').value = ''; }
-  envLoad(); botRefresh();
-}
-async function tokenTest(){
-  const token = document.getElementById('token-input').value.trim();
-  const r = await fetch('/api/bot/token/test', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token})});
-  const d = await r.json();
-  document.getElementById('token-result').textContent = r.status===200 ? ('连通: '+d.username) : ('失败: '+errText({data:d}));
-}
-async function botRefresh(){
+async function jget(u){ const r = await fetch(u); return r.json(); }
+async function jcall(method, u, body){
   try {
-    const s = await (await fetch('/api/bot/status')).json();
-    const run = s.status === 'running';
-    document.getElementById('dot').textContent = run ? '🟢' : '🔴';
-    document.getElementById('stext').textContent = run ? 'Bot 运行中' : 'Bot 未运行';
-    const l = await (await fetch('/api/bot/log?num=200')).json();
-    document.getElementById('botlog').textContent = l.log || JSON.stringify(l);
-  } catch(e){ document.getElementById('stext').textContent = '查询失败：' + e; }
+    const r = await fetch(u, {method:method, headers:{'Content-Type':'application/json'}, body:body?JSON.stringify(body):undefined});
+    let d = {};
+    try { d = await r.json(); } catch(e){ d = {detail:'非JSON响应'}; }
+    return {status:r.status, data:d};
+  } catch(e){ return {status:0, data:{detail:'网络不通：'+e}}; }
 }
-async function botStart(){
-  if(!confirm('确认启动 Bot？')) return;
-  const r = await (await fetch('/api/bot/start', {method:'POST'})).json();
-  alert(r.message || JSON.stringify(r)); setTimeout(botRefresh, 3000);
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+async function botsLoad(){
+  const d = await jget('/api/bots');
+  if(!d.data){ document.getElementById('bot-grid').innerHTML = '<div class="card">需登录查看</div>'; return; }
+  document.getElementById('bot-count').textContent = '已添加 ' + d.total + ' / ' + d.max + ' 个';
+  document.getElementById('bot-grid').innerHTML = d.data.map(function(b){
+    return '<div class="square">' +
+    '<h3>' + esc(b.name) + (b.is_default ? '（默认）' : '') + ' <span class="badge ' + (b.running?'on':'off') + '">' + (b.running?'运行中':'已停止') + '</span></h3>' +
+    '<div class="meta">TOKEN: ' + esc(b.bot_token_masked) + '</div>' +
+    '<div class="meta">API_ID: ' + esc(b.api_id||'—') + ' · HASH: ' + esc(b.api_hash_masked) + '</div>' +
+    '<input id="tk-'+b.id+'" type="password" placeholder="新BOT_TOKEN（空=不改）">' +
+    '<input id="ai-'+b.id+'" placeholder="新API_ID（空=不改）">' +
+    '<input id="ah-'+b.id+'" type="password" placeholder="新API_HASH（空=不改）">' +
+    '<div class="row">' +
+    '<button class="btn" onclick="botStart('+b.id+')">启动</button>' +
+    '<button class="btn btn-danger" onclick="botStop('+b.id+')">停止</button>' +
+    '<button class="btn btn-gray" onclick="botTest('+b.id+')">测试</button>' +
+    '</div><div class="row">' +
+    '<button class="btn" onclick="botSave('+b.id+')">保存凭证</button>' +
+    '<button class="btn btn-gray" onclick="botLog('+b.id+')">日志</button>' +
+    '<button class="btn btn-danger" onclick="botDel('+b.id+')">删除</button>' +
+    '</div>' +
+    '<div class="meta" id="msg-'+b.id+'"></div>' +
+    '<pre id="log-'+b.id+'" style="display:none;"></pre>' +
+    '</div>';
+  }).join('') || '<div class="card">暂无机器人，上面添加</div>';
 }
-async function botStop(){
-  if(!confirm('确认停止 Bot？')) return;
-  const r = await (await fetch('/api/bot/stop', {method:'POST'})).json();
-  alert(r.message || JSON.stringify(r)); botRefresh();
+function say(id, t){ document.getElementById('msg-'+id).textContent = t; }
+async function botAdd(){
+  const body = {name:document.getElementById('new-name').value.trim(),
+    bot_token:document.getElementById('new-token').value.trim(),
+    api_id:document.getElementById('new-api-id').value.trim(),
+    api_hash:document.getElementById('new-api-hash').value.trim()};
+  if(!body.bot_token){ alert('请填写BOT_TOKEN'); return; }
+  const r = await jcall('POST', '/api/bots', body);
+  document.getElementById('add-result').textContent = r.data.message || r.data.detail || JSON.stringify(r.data);
+  if(r.status === 200){ document.getElementById('new-name').value=''; document.getElementById('new-token').value=''; document.getElementById('new-api-id').value=''; document.getElementById('new-api-hash').value=''; }
+  botsLoad();
 }
-botRefresh();
+async function botStart(id){
+  const r = await jcall('POST', '/api/bots/'+id+'/start');
+  say(id, r.data.message || r.data.detail || JSON.stringify(r.data)); setTimeout(botsLoad, 2000);
+}
+async function botStop(id){
+  if(!confirm('确认停止该机器人？')) return;
+  const r = await jcall('POST', '/api/bots/'+id+'/stop');
+  say(id, r.data.message || r.data.detail || JSON.stringify(r.data)); botsLoad();
+}
+async function botTest(id){
+  const r = await jcall('POST', '/api/bots/'+id+'/test');
+  say(id, r.status===200 ? ('连通: '+r.data.username) : ('失败: '+(r.data.detail||JSON.stringify(r.data))));
+}
+async function botSave(id){
+  const body = {};
+  const t = document.getElementById('tk-'+id).value.trim();
+  const a = document.getElementById('ai-'+id).value.trim();
+  const h = document.getElementById('ah-'+id).value.trim();
+  if(t) body.bot_token = t; if(a) body.api_id = a; if(h) body.api_hash = h;
+  if(!Object.keys(body).length){ say(id, '三项全空，无需保存'); return; }
+  const r = await jcall('PUT', '/api/bots/'+id, body);
+  say(id, r.data.message || r.data.detail || JSON.stringify(r.data)); botsLoad();
+}
+async function botDel(id){
+  if(!confirm('删除该机器人（含凭证）？运行中会先停止。')) return;
+  const r = await jcall('DELETE', '/api/bots/'+id);
+  alert(r.data.message || r.data.detail || JSON.stringify(r.data)); botsLoad();
+}
+async function botLog(id){
+  const el = document.getElementById('log-'+id);
+  if(el.style.display !== 'none'){ el.style.display = 'none'; return; }
+  const r = await fetch('/api/bots/'+id+'/log?num=100'); const d = await r.json();
+  el.textContent = d.log || JSON.stringify(d); el.style.display = 'block';
+}
+botsLoad();
 </script>
 </body>
 </html>"""

@@ -9,7 +9,7 @@ client = TestClient(app)
 def test_console_public():
     r = client.get('/console')
     assert r.status_code == 200
-    for needle in ('实时监控台', 'm-phones', 'logstream', 'req-total'):
+    for needle in ('实时监控台', 'm-phones', 'logstream', 'req-total', 'console-botlog'):
         assert needle in r.text
     for gone in ('opGenerate', 'opConvert', 'cfgSave', 'userAdd', 'mallLoad', 'tgSwitch'):
         assert gone not in r.text
