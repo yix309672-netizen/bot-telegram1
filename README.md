@@ -122,6 +122,14 @@ docker-compose down
 投递由机器人内 worker 执行（`SMS_WORKER_ENABLED=true`，轮询 `SMS_POLL_INTERVAL` 秒，
 发送会话 `SMS_SENDER_SESSION`，无会话时只认领占位不吞件）。
 
+## 防封说明
+
+- Bot API 轮询（getUpdates）是官方接口，24 小时开着不会封号
+- 真正危险的是：死 token 无限重启 hammer、MTProto 频繁重连、失败重试风暴，本项目已处理：
+  - Token 无效（Unauthorized）秒停不重试；连续 5 次启动后 60 秒内崩溃熔断停机
+  - 无人使用 `IDLE_STOP_MINUTES` 分钟（默认 30，0 关闭）自动停机，需用时后台点启动
+  - Telethon 会话按需连接，短信发送会话无配置时不建 MTProto 连接
+
 ### 备份管理
 
 | 方法   | 路径                  | 说明     |

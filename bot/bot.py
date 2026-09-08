@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import shutil
+import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -16,7 +17,7 @@ import telethon
 from dotenv import load_dotenv
 from telegram import KeyboardButton, ReplyKeyboardMarkup
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, TypeHandler
 from telethon import TelegramClient
 
 import sys
@@ -588,10 +589,20 @@ async def post_init(app):
     if SMS_WORKER_ENABLED:
         app.create_task(sms_worker_loop(), name="sms-worker")
         logger.info("短信投递 worker 已启动")
+    if IDLE_STOP_MINUTES > 0:
+        try:
+            app.job_queue.run_repeating(idle_check, interval=60, first=60)
+        except Exception:
+            app.create_task(idle_check_loop(app), name="idle-check")
+        logger.info(f"空闲{IDLE_STOP_MINUTES}分钟自动停机已启用")
 
 
 def main():
+    global _start_time
+    _start_time = time.time()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
+    # 活跃度追踪（group=-1 最先执行，不干扰业务）
+    app.add_handler(TypeHandler(Update, track_activity), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("restart", handle_restart))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
@@ -603,6 +614,48 @@ def main():
     logger.info("Bot 已启动")
     app.run_polling(drop_pending_updates=True)
 
+# 防封配置：无人使用自动停机（分钟，0=关闭）；连续快挂熔断阈值
+IDLE_STOP_MINUTES = int(os.getenv("IDLE_STOP_MINUTES", "30"))
+MAX_FAST_FAILS = 5
+_should_run = True
+_start_time = 0.0
+_fail_count = 0
+_last_activity = time.time()
+
+
+async def track_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 任何用户消息都刷新活跃时间
+    global _last_activity
+    _last_activity = time.time()
+
+
+async def idle_check_loop(app):
+    # 空闲巡检（替代 job_queue，零额外依赖）
+    global _should_run
+    while True:
+        await asyncio.sleep(60)
+        if not _should_run or IDLE_STOP_MINUTES <= 0:
+            continue
+        idle_min = (time.time() - _last_activity) / 60
+        if idle_min >= IDLE_STOP_MINUTES:
+            logger.info(f"空闲 {idle_min:.0f} 分钟无访问，自动停机防封（后台可手动启动）")
+            _should_run = False
+            await app.stop()
+            break
+
+
+async def idle_check(context: ContextTypes.DEFAULT_TYPE):
+    # 保留兼容（job_queue 可用时）
+    global _should_run
+    if not _should_run or IDLE_STOP_MINUTES <= 0:
+        return
+    idle_min = (time.time() - _last_activity) / 60
+    if idle_min >= IDLE_STOP_MINUTES:
+        logger.info(f"空闲 {idle_min:.0f} 分钟无访问，自动停机防封（后台可手动启动）")
+        _should_run = False
+        await context.application.stop()
+
+
 if __name__ == "__main__":
     while True:
         try:
@@ -611,7 +664,23 @@ if __name__ == "__main__":
             logger.info("收到停止信号，机器人已关闭。")
             break
         except Exception as e:
-            logger.error(f"机器人发生异常: {str(e)}")
-            logger.info("5秒后自动重启...")
-            import time
-            time.sleep(5)
+            msg = str(e)
+            # 鉴权错（死token）绝不重试：否则无限 hammer Telegram 必被封
+            if "InvalidToken" in type(e).__name__ or "Unauthorized" in msg or "unauthorized" in msg:
+                logger.error(f"Token无效，拒绝重启（换有效token后再启动）: {msg[:200]}")
+                break
+            uptime = time.time() - _start_time if _start_time else 9999
+            if uptime < 60:
+                _fail_count += 1
+            else:
+                _fail_count = 0
+            if _fail_count >= MAX_FAST_FAILS:
+                logger.error(f"连续 {_fail_count} 次启动后60秒内崩溃，熔断停机防封，请看日志排查")
+                break
+            if not _should_run:
+                logger.info("空闲停机，不再重启")
+                break
+            wait = min(5 * (_fail_count + 1), 300)
+            logger.error(f"机器人发生异常: {msg[:200]}")
+            logger.info(f"{wait}秒后重启（第{_fail_count + 1}次）...")
+            time.sleep(wait)
