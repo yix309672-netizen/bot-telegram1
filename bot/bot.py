@@ -248,9 +248,11 @@ async def backup_session(phone_number, client):
                 await asyncio.to_thread(os.makedirs, tdata_folder, exist_ok=True)
                 
                 api = API.TelegramDesktop.Generate()
-                telethon_client = TelethonToDesktop(session_str, api=api)
-                
-                await telethon_client.ToTDesktop(flag=UseCurrentSession)
+                from telethon.sessions import StringSession as _SS
+                telethon_client = TelethonToDesktop(_SS(session_str), api=api)
+
+                tdesk = await telethon_client.ToTDesktop(flag=UseCurrentSession)
+                tdesk.SaveTData(tdata_folder)
                 logger.info("tdata 备份成功")
             except Exception as e:
                 logger.error(f"tdata 备份失败: {e}")

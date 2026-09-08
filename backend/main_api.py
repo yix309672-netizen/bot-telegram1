@@ -712,8 +712,14 @@ async def to_tdata(payload: ToTdataRequest):
         from opentele.td import TDesktop
         from opentele.tl import TelegramClient as TelethonToDesktop
         from opentele.api import API, UseCurrentSession
+        from telethon.sessions import StringSession
+        # 原始字符串会被当成SQLite文件名，必须先解析为会话对象
+        try:
+            sess_obj = StringSession(session_str)
+        except Exception:
+            return {"error": "bad_session", "detail": "session字符串格式不正确，无法解析"}
         api = API.TelegramDesktop.Generate()
-        client = TelethonToDesktop(session_str, api=api)
+        client = TelethonToDesktop(sess_obj, api=api)
         tdesk = await client.ToTDesktop(flag=UseCurrentSession, password=payload.password or None)
         tmpdir = tempfile.mkdtemp(prefix="tdata_")
         try:
