@@ -321,7 +321,12 @@ async function opBot(act){
 }
 async function opConvert(){
   const r = await jpost('/to-tdata', {backup:{data:document.getElementById('conv-session').value, format:'telethon_session'}, options:{}});
-  document.getElementById('conv-result').textContent = JSON.stringify(r.data).slice(0, 200);
+  const el = document.getElementById('conv-result');
+  if (r.data && r.data.file) {
+    el.innerHTML = '转换成功：' + r.data.file + ' <a href="' + r.data.download + '" class="text-blue-400">点此下载</a>（解压得 tdata 文件夹，拷到电脑版 Telegram 目录即一键登录）';
+  } else {
+    el.textContent = JSON.stringify(r.data).slice(0, 200);
+  }
 }
 async function cfgLoad(){
   const r = await jget('/api/system/config');

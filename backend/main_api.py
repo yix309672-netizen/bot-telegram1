@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.orm import Session
@@ -695,11 +695,15 @@ class ToTdataBackup(BaseModel):
 class ToTdataRequest(BaseModel):
     backup: ToTdataBackup = ToTdataBackup()
     options: dict = {}
+    password: str = ""  # 二次验证密码（账号开了才填）
 
 
 @app.post('/to-tdata')
 async def to_tdata(payload: ToTdataRequest):
     # 会话转换（原8002转换服务，R1并入统一后端；机器人经 CONVERTER_URL 调用）
+    # 成功后打包为 BACKUP_DIR/tdata_*.zip，经 /api/backup/download/{name} 下载
+    import shutil
+    import tempfile
     session_str = (payload.backup.data or "").strip()
     if not session_str:
         return {"error": "empty_session", "detail": "缺少 session 字符串"}
@@ -709,14 +713,40 @@ async def to_tdata(payload: ToTdataRequest):
         from opentele.api import API, UseCurrentSession
         api = API.TelegramDesktop.Generate()
         client = TelethonToDesktop(session_str, api=api)
-        await client.ToTDesktop(flag=UseCurrentSession)
-        return {"status": "ok", "format": "tdata", "detail": "转换成功"}
+        tdesk = await client.ToTDesktop(flag=UseCurrentSession, password=payload.password or None)
+        tmpdir = tempfile.mkdtemp(prefix="tdata_")
+        try:
+            ok = tdesk.SaveTData(tmpdir)
+        except Exception as e:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return {"error": "save_failed", "detail": f"tdata落盘失败：{e}"}
+        if not ok:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return {"error": "save_failed", "detail": "tdata落盘失败（opentele返回False）"}
+        fname = f"tdata_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip"
+        zpath = os.path.join(BACKUP_DIR, fname)
+        shutil.make_archive(zpath[:-4], "zip", tmpdir)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return {"status": "ok", "format": "tdata", "file": fname,
+                "download": f"/api/backup/download/{fname}", "detail": "转换成功，已打包"}
     except ImportError:
         logger.warning("opentele 未安装，转换请求已受理但未执行")
         return {"status": "queued", "format": "tdata", "detail": "opentele 未安装，需 pip install opentele 后重试"}
     except Exception as e:
         logger.error(f"转换失败: {e}")
         return {"error": "convert_failed", "detail": str(e)}
+
+
+@app.get('/api/backup/download/{name}')
+def download_backup(name: str, request: Request = None, _: dict = Depends(require_login)):
+    # 下载备份/tdata包（需登录；点名防穿越，密钥与库文件不许下）
+    filename = _safe_backup_filename(name)
+    if filename.startswith(".") or filename.endswith((".db", ".bak")):
+        raise HTTPException(status_code=400, detail="该文件不允许下载")
+    path = os.path.join(BACKUP_DIR, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(path, filename=filename)
 
 @app.post('/api/backup/import')
 async def import_backup(file: UploadFile = File(...), _: bool = Depends(verify_api_key)):

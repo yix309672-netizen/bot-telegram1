@@ -340,10 +340,12 @@ html_sms = '''
 '''
 
 def render_backups_page(files):
-    """备份文件列表页：files为[(name, size, mtime_str)]"""
+    """备份文件列表页：files为[(name, size, mtime_str)]，带下载/删除"""
     rows = "".join(
-        f"<tr><td style='font-family:monospace;'>{n}</td><td>{s}</td><td>{t}</td></tr>"
-        for n, s, t in files) or '<tr><td colspan="3" style="text-align:center">暂无备份数据</td></tr>'
+        f"<tr><td style='font-family:monospace;'>{n}</td><td>{s}</td><td>{t}</td>"
+        f"<td><a href='/api/backup/download/{n}' style='color:#667eea;'>下载</a> "
+        f"<a href=\"javascript:delBackup('{n}')\" style='color:#dc2626;'>删除</a></td></tr>"
+        for n, s, t in files) or '<tr><td colspan="4" style="text-align:center">暂无备份数据</td></tr>'
     return (
         "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'>"
         "<title>备份管理 - Telegram 后台</title><style>"
@@ -355,6 +357,13 @@ def render_backups_page(files):
         "</style></head><body>"
         "<div class='header'><h1>📦 备份管理</h1></div>"
         "<div class='container'><div class='card'><table>"
-        "<thead><tr><th>文件名</th><th>大小</th><th>修改时间</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table></div></div></body></html>"
+        "<thead><tr><th>文件名</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table></div></div>"
+        "<script>"
+        "async function delBackup(name){"
+        "  if(!confirm('删除 '+name+'？')) return;"
+        "  const r = await fetch('/api/backup/'+encodeURIComponent(name), {method:'DELETE'});"
+        "  const d = await r.json(); alert(d.message || d.detail || '完成'); location.reload();"
+        "}"
+        "</script></body></html>"
     )
