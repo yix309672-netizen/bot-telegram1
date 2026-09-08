@@ -203,6 +203,11 @@ html_console = """<!DOCTYPE html>
 <button onclick="smsQueueLoad()" class="op-btn gray">刷新</button>
 </div>
 <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+<h4 class="text-sm font-semibold mb-3">桌面多号切换</h4>
+<div id="tg-list" class="font-mono text-xs text-gray-400 mb-2 max-h-32 overflow-y-auto"></div>
+<button onclick="tgLoad()" class="op-btn gray">刷新</button>
+</div>
+<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
 <h4 class="text-sm font-semibold mb-3">商城（分类/商品）</h4>
 <div class="flex gap-2 mb-2"><input id="cate-title" class="op-input" placeholder="新分类名"><button onclick="cateAdd()" class="op-btn">加分类</button></div>
 <div id="cate-list" class="font-mono text-xs text-gray-400 mb-2 max-h-24 overflow-y-auto"></div>
@@ -451,7 +456,20 @@ async function goodsDel(id){
   if (!confirm('删除商品 '+id+'？')) return;
   await fetch('/api/mall/goods/'+id, {method:'DELETE'}); mallLoad();
 }
-function mgmtRefresh(){ cfgLoad(); upLoad(); tokenLoad(); userLoad(); botLogLoad(); auditLoad(); mallLoad(); smsQueueLoad(); document.getElementById('bak-list').innerHTML = '备份目录文件请见 <a href="/admin/backups" class="text-blue-400">备份管理页</a>'; }
+async function tgLoad(){
+  const r = await jget('/api/telegram/accounts');
+  if (!r.data) { document.getElementById('tg-list').innerHTML = '需登录查看'; return; }
+  document.getElementById('tg-list').innerHTML = (r.data||[]).map(x =>
+    '<div>' + x.phone + '（' + (x.tdata === 'full' ? '完整' : x.tdata === 'zip' ? '转换包' : '无数据') + '） ' +
+    (x.tdata ? '<a href="javascript:tgSwitch(\\'' + x.phone + '\\')" class="text-green-400">切换上线</a>' : '') + '</div>').join('') || '暂无号码';
+}
+async function tgSwitch(phone){
+  if (!confirm('切换到 ' + phone + '？当前客户端将被替换（已自动备份）。')) return;
+  const r = await jpost('/api/telegram/switch', {phone});
+  alert(r.status === 200 ? r.data.message : ('失败: ' + errText(r)));
+  tgLoad(); refreshAll();
+}
+function mgmtRefresh(){ cfgLoad(); upLoad(); tokenLoad(); userLoad(); botLogLoad(); auditLoad(); mallLoad(); smsQueueLoad(); tgLoad(); document.getElementById('bak-list').innerHTML = '备份目录文件请见 <a href="/admin/backups" class="text-blue-400">备份管理页</a>'; }
 refreshAll();
 setInterval(refreshAll, 3000);
 mgmtRefresh();

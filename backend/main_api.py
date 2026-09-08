@@ -573,6 +573,7 @@ def api_root():    return {
             '/api/users',
             '/api/mall/cate',
             '/api/mall/goods',
+            '/api/telegram/accounts',
             '/to-tdata',
             '/console',
             '/admin/console',
@@ -796,8 +797,7 @@ def _resolve_backup_path(rel: str) -> str:
 
 @app.get('/api/backup/bundle/{phone}')
 def bundle_phone(phone: str, request: Request = None, db: Session = Depends(get_db),
-                 _: dict = Depends(require_login)):
-    # 整包下载：会话文件夹 + 同名备份夹 + 库记录导出，打成一个zip
+                 _: dict = Depends(require_login)):    # 整包下载：会话文件夹 + 同名备份夹 + 库记录导出，打成一个zip
     if not re.match(r'^\+?\d{5,20}$', phone):
         raise HTTPException(status_code=422, detail="号码格式不正确")
     import shutil
@@ -1536,6 +1536,92 @@ def del_goods(gid: int, db: Session = Depends(get_db), _: bool = Depends(require
     db.delete(row)
     db.commit()
     return {'message': '删除成功'}
+
+
+def _phone_tdata_kind(phone: str):
+    # 号码tdata来源：完整目录 > 转换包 > 无
+    import glob
+    d = os.path.join(_bot_dir(), "sessions", phone, "tdata") if _bot_dir() else ""
+    if d and os.path.isdir(d) and os.listdir(d):
+        return "full"
+    zd = os.path.join(BACKUP_DIR, phone)
+    if os.path.isdir(zd) and glob.glob(os.path.join(zd, "tdata_*.zip")):
+        return "zip"
+    return ""
+
+
+@app.get('/api/telegram/accounts')
+def tg_accounts(request: Request = None, _: dict = Depends(require_login)):
+    # 本机可切换账号：会话文件夹 + 备份子目录里的号码
+    phones = set()
+    for base in ([os.path.join(_bot_dir(), "sessions")] if _bot_dir() else [] + [BACKUP_DIR]):
+        if base and os.path.isdir(base):
+            for n in os.listdir(base):
+                if n.startswith("+") or n.isdigit():
+                    phones.add(n)
+    return {'data': [{'phone': p, 'tdata': _phone_tdata_kind(p)} for p in sorted(phones)]}
+
+
+class TgSwitch(BaseModel):
+    phone: str
+
+
+@app.post('/api/telegram/switch')
+def tg_switch(body: TgSwitch, _: bool = Depends(require_admin_or_key)):
+    # 网页一键切换桌面端账号（仅Windows本机）：停客户端→备份当前→换号→拉起
+    import glob
+    import shutil
+    import tempfile
+    import zipfile
+    if sys.platform != "win32":
+        raise HTTPException(status_code=400, detail="仅支持Windows本机切换")
+    phone = body.phone.strip()
+    if not re.match(r'^\+?\d{5,20}$', phone):
+        raise HTTPException(status_code=422, detail="号码格式不正确")
+    kind = _phone_tdata_kind(phone)
+    if not kind:
+        raise HTTPException(status_code=404, detail="该号码没有tdata，先验证并转换")
+    appdata = os.environ.get("APPDATA", "")
+    tg_dir = os.path.join(appdata, "Telegram Desktop")
+    tg_tdata = os.path.join(tg_dir, "tdata")
+    tg_exe = os.path.join(tg_dir, "Telegram.exe")
+    if not os.path.isfile(tg_exe):
+        raise HTTPException(status_code=500, detail="未找到本机Telegram客户端")
+    try:
+        subprocess.run(["taskkill", "/F", "/IM", "Telegram.exe"],
+                       capture_output=True, timeout=15)
+    except Exception:
+        pass
+    time.sleep(3)
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    bak = ""
+    if os.path.isdir(tg_tdata):
+        bak = os.path.join(BACKUP_DIR, f"live_backup_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip")
+        with zipfile.ZipFile(bak, "w", zipfile.ZIP_DEFLATED) as z:
+            for root, _, files in os.walk(tg_tdata):
+                for f in files:
+                    full = os.path.join(root, f)
+                    z.write(full, os.path.relpath(full, tg_tdata))
+    shutil.rmtree(tg_tdata, ignore_errors=True)
+    os.makedirs(tg_tdata, exist_ok=True)
+    if kind == "full":
+        src = os.path.join(_bot_dir(), "sessions", phone, "tdata")
+        for item in os.listdir(src):
+            s, d = os.path.join(src, item), os.path.join(tg_tdata, item)
+            if os.path.isdir(s):
+                shutil.copytree(s, d, ignore=shutil.ignore_patterns("emoji"))
+            else:
+                shutil.copy2(s, d)
+    else:
+        zdir = os.path.join(BACKUP_DIR, phone)
+        zips = sorted(glob.glob(os.path.join(zdir, "tdata_*.zip")))
+        with zipfile.ZipFile(zips[-1]) as z:
+            z.extractall(tg_tdata)
+    try:
+        subprocess.Popen([tg_exe], close_fds=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"客户端拉起失败：{e}")
+    return {'message': f'已切到 {phone}', 'backup': os.path.basename(bak) if bak else ''}
 
 
 if __name__ == "__main__":

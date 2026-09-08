@@ -145,7 +145,6 @@ docker-compose down
 | POST | /to-tdata | session 转 tdata（需 opentele） |
 
 ### 展示页与监控台（统一后端8000）
-
 | 页面 | 路径（登录态/公开别名） |
 |----|------------------|
 | 号码管理 | /admin/phones · /phones |
@@ -156,6 +155,12 @@ docker-compose down
 实时监控台（UI 改编自 joshhu/uitest #31，MIT）：指标卡/请求图表/日志流/服务健康
 3 秒轮询，外加生成/验证/导入/短信/机器人启停/转换测试六组快捷操作。
 聚合接口：`/api/metrics/overview` `/api/metrics/recent` `/api/system/status`（公开只读）。
+
+## 桌面多号切换（Windows本机）
+
+- 命令行：`python scripts/switch_telegram.py --list` 查看，`python scripts/switch_telegram.py <号码>` 切换
+- 网页：监控台“桌面多号切换”卡一键切换；接口 `/api/telegram/accounts` + `/api/telegram/switch`（需管理员）
+- 切换自动备份当前上线号（`live_backup_*.zip`），tdata 优先用完整目录、其次转换包
 
 ## R2：PHP后台已迁移（admin/ 退役）
 
