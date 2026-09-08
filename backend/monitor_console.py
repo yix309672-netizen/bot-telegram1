@@ -163,16 +163,6 @@ html_console = """<!DOCTYPE html>
 <div id="up-list" class="font-mono text-xs text-gray-400 mt-2 max-h-32 overflow-y-auto"></div>
 </div>
 <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
-<h4 class="text-sm font-semibold mb-3">机器人凭证（三件套）</h4>
-<p class="font-mono text-xs text-gray-400 mb-2">TOKEN: <span id="token-masked">--</span></p>
-<p class="font-mono text-xs text-gray-400 mb-2">API_ID: <span id="env-api-id">--</span> · HASH: <span id="env-api-hash">--</span></p>
-<input id="token-input" type="password" class="op-input mb-2" placeholder="新BOT_TOKEN（空=不改）">
-<input id="env-api-id-input" class="op-input mb-2" placeholder="新API_ID（空=不改）">
-<input id="env-api-hash-input" type="password" class="op-input mb-2" placeholder="新API_HASH（空=不改）">
-<div class="flex gap-2 flex-wrap"><button onclick="envSave()" class="op-btn">保存全部</button><button onclick="tokenTest()" class="op-btn gray">测试链接</button></div>
-<p id="token-result" class="font-mono text-xs text-gray-400 mt-2 break-all"></p>
-</div>
-<div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
 <h4 class="text-sm font-semibold mb-3">账号管理</h4>
 <div id="user-list" class="font-mono text-xs text-gray-400 mb-2 max-h-32 overflow-y-auto"></div>
 <input id="user-name" class="op-input mb-2" placeholder="用户名">
@@ -361,34 +351,6 @@ async function upLoad(){
   const r = await jget('/api/upload/list?limit=20');
   document.getElementById('up-list').innerHTML = (r.data||[]).map(x=>'<div>'+x.filename+' ('+x.size+'B)</div>').join('') || '暂无';
 }
-async function tokenLoad(){
-  const r = await fetch('/api/bot/env'); const d = await r.json();
-  if (needLogin(d)) {
-    document.getElementById('token-masked').textContent = '未登录：请先去管理后台登录';
-    return;
-  }
-  document.getElementById('token-masked').textContent = d.bot_token_masked || '--';
-  document.getElementById('env-api-id').textContent = d.api_id || '（未配置）';
-  document.getElementById('env-api-hash').textContent = d.api_hash_masked || '（未配置）';
-}
-async function tokenSave(){
-  await envSave();
-}
-async function envSave(){
-  const body = {bot_token: document.getElementById('token-input').value.trim(),
-    api_id: document.getElementById('env-api-id-input').value.trim(),
-    api_hash: document.getElementById('env-api-hash-input').value.trim()};
-  const r = await fetch('/api/bot/env', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  const d = await r.json();
-  document.getElementById('token-result').textContent = errText({data:d});
-  if (r.status === 200) { document.getElementById('token-input').value = ''; document.getElementById('env-api-id-input').value = ''; document.getElementById('env-api-hash-input').value = ''; }
-  tokenLoad();
-}
-async function tokenTest(){
-  const token = document.getElementById('token-input').value.trim();
-  const r = await jpost('/api/bot/token/test', {token});
-  document.getElementById('token-result').textContent = r.status===200 ? ('连通: '+r.data.username) : ('失败: '+errText(r));
-}
 async function userLoad(){
   const r = await fetch('/api/users'); const d = await r.json();
   if (!d.data) { document.getElementById('user-list').innerHTML = '需管理员登录（管理后台进）'; return; }
@@ -469,10 +431,27 @@ async function tgSwitch(phone){
   alert(r.status === 200 ? r.data.message : ('失败: ' + errText(r)));
   tgLoad(); refreshAll();
 }
-function mgmtRefresh(){ cfgLoad(); upLoad(); tokenLoad(); userLoad(); botLogLoad(); auditLoad(); mallLoad(); smsQueueLoad(); tgLoad(); document.getElementById('bak-list').innerHTML = '备份目录文件请见 <a href="/admin/backups" class="text-blue-400">备份管理页</a>'; }
+function mgmtRefresh(){ cfgLoad(); upLoad(); userLoad(); botLogLoad(); auditLoad(); mallLoad(); smsQueueLoad(); tgLoad(); document.getElementById('bak-list').innerHTML = '备份目录文件请见 <a href="/admin/backups" class="text-blue-400">备份管理页</a>'; }
 refreshAll();
 setInterval(refreshAll, 3000);
 mgmtRefresh();
+// 侧栏深链：#hash 滚动到对应卡片
+(function(){
+  const map = {'top':null, 'ops':'快捷操作', 'convert':'转换测试', 'smsqueue':'短信队列', 'cfg':'系统配置',
+    'upload':'文件上传', 'users':'账号管理', 'botlog':'机器人日志',
+    'audit':'操作审计', 'mall':'商城', 'tgswitch':'桌面多号切换'};
+  function go(){
+    const key = (location.hash || '#top').slice(1);
+    if (!(key in map)) return;
+    if (map[key] === null) { window.scrollTo(0, 0); return; }
+    const els = document.querySelectorAll('h3, h4');
+    for (const el of els) {
+      if (el.textContent.indexOf(map[key]) !== -1) { el.scrollIntoView({block:'start'}); break; }
+    }
+  }
+  window.addEventListener('hashchange', go);
+  setTimeout(go, 600);
+})();
 </script>
 </body>
 </html>"""

@@ -26,6 +26,9 @@ def test_shell_nav_has_seven():
     login = client.post('/admin/login', data={'username': 'admin', 'password': 'admin123'})
     ck = {'access_token': login.cookies.get('access_token')}
     shell = TestClient(app).get('/admin/', cookies=ck).text
-    for nav in ('/admin/console', '/admin/bot', '/admin/phone-tool', '/admin/phones',
-                '/admin/sms', '/admin/backups', '/docs'):
+    for nav in ('/admin/console#top', '/admin/bot', '/admin/phone-tool', '/admin/phones',
+                '/admin/sms', '/admin/backups', '/docs',
+                '/admin/console#smsqueue', '/admin/console#cfg', '/admin/console#users'):
         assert f'data-src="{nav}"' in shell
+    for g in ('监控', '操作', '管理'):
+        assert g in shell

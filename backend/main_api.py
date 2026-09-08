@@ -443,7 +443,11 @@ ADMIN_SHELL = """
     .topbar a{color:#9ca3af;text-decoration:none}
     .topbar a:hover{color:#fff}
     .wrap{flex:1;display:flex;min-height:0}
-    .sidebar{width:200px;background:#1f2937;border-right:1px solid #374151;padding:12px 0;flex-shrink:0}
+    .sidebar{width:200px;background:#1f2937;border-right:1px solid #374151;padding:12px 0;flex-shrink:0;overflow-y:auto}
+    .sidebar button{display:block;width:100%;text-align:left;background:none;border:none;color:#d1d5db;padding:10px 20px;font-size:14px;cursor:pointer;border-left:3px solid transparent}
+    .sidebar button:hover{background:#374151;color:#fff}
+    .sidebar button.active{background:#374151;color:#fff;border-left-color:#22c55e}
+    .side-group{padding:10px 20px 4px;font-size:12px;color:#6b7280}
     .sidebar button{display:block;width:100%;text-align:left;background:none;border:none;color:#d1d5db;padding:12px 20px;font-size:14px;cursor:pointer;border-left:3px solid transparent}
     .sidebar button:hover{background:#374151;color:#fff}
     .sidebar button.active{background:#374151;color:#fff;border-left-color:#22c55e}
@@ -465,12 +469,25 @@ ADMIN_SHELL = """
   </div>
   <div class="wrap">
     <div class="sidebar">
-      <button data-src="/admin/console" class="active">📊 监控台</button>
+      <div class="side-group">监控</div>
+      <button data-src="/admin/console#top" class="active">📊 监控总览</button>
+      <button data-src="/admin/console#smsqueue">📨 短信队列</button>
+      <div class="side-group">操作</div>
       <button data-src="/admin/bot">🤖 BOT控制台</button>
       <button data-src="/admin/phone-tool">📱 生成验证号码</button>
+      <button data-src="/admin/console#ops">⚡ 快捷操作</button>
+      <button data-src="/admin/console#convert">🔄 转换测试</button>
+      <div class="side-group">管理</div>
       <button data-src="/admin/phones">📱 号码管理</button>
       <button data-src="/admin/sms">💬 短信记录</button>
       <button data-src="/admin/backups">📦 备份管理</button>
+      <button data-src="/admin/console#cfg">⚙️ 系统配置</button>
+      <button data-src="/admin/console#upload">📤 文件上传</button>
+      <button data-src="/admin/console#users">👥 账号管理</button>
+      <button data-src="/admin/console#botlog">📜 机器人日志</button>
+      <button data-src="/admin/console#audit">📝 操作审计</button>
+      <button data-src="/admin/console#mall">🛍 商城</button>
+      <button data-src="/admin/console#tgswitch">🖥 桌面切换</button>
       <button data-src="/docs">📖 接口文档</button>
     </div>
     <div class="content">
