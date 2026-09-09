@@ -19,9 +19,22 @@ env/
 
 # Sessions / Backups
 sessions/
+sessions_backup/
 *.session
 *.session-journal
 backups/
+
+# 无关实验区（独立项目，不入库）
+sandbox/
+pack/
+wallet-tool/
+
+# 本地运行数据（MySQL数据卷/日志/上传产物，不入库）
+mysql-data/
+mysql-tmp/
+logs/
+backend/data/
+.pytest_cache/
 
 # 本地数据库与密钥（自动生成，不入库）
 *.db
