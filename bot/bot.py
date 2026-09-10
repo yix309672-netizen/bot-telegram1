@@ -130,18 +130,6 @@ def create_restart_button(lang="zh"):
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
 
 
-def create_lang_keyboard():
-    keyboard = [[KeyboardButton("中文"), KeyboardButton("English")]]
-    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-
-
-async def handle_lang(update, context):
-    # /lang 命令与语言按钮：切换对话语言
-    await update.message.reply_text(t(user_states.get(update.effective_user.id, {}).get("lang", DEFAULT_BOT_LANG),
-                                      "lang_choose"),
-                                    reply_markup=create_lang_keyboard())
-
-
 def create_keypad(lang="zh"):
     """数字键盘（截图同款：纯数字+确认/清除）"""
     keyboard = [
@@ -411,8 +399,7 @@ async def start(update, context):
     await clear_step_msgs(update, context)
     lang = user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)
     user_states[user_id] = {"state": "start", "code_attempts": 0, "password_attempts": 0, "lang": lang}
-    keyboard = [[KeyboardButton(L(user_id, "send_phone"), request_contact=True)],
-                [KeyboardButton("🌐 语言 / Language")]]
+    keyboard = [[KeyboardButton(L(user_id, "send_phone"), request_contact=True)]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
     await update.message.reply_text(
         L(user_id, "welcome"),
@@ -623,15 +610,6 @@ async def handle_message(update, context):
         await handle_restart(update, context)
         return
 
-    # 语言切换（任何阶段可用）
-    if text in ("🌐 语言 / Language", "🌐 语言", "🌐 Language"):
-        await handle_lang(update, context)
-        return
-    if text in ("中文", "English"):
-        user_states.setdefault(user_id, {})["lang"] = normalize_lang(text)
-        await update.message.reply_text(L(user_id, "lang_set"))
-        return
-
     if not state or state == "start":
         await update.message.reply_text(L(user_id, "need_start2"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
         return
@@ -833,7 +811,6 @@ def main():
     app.add_handler(TypeHandler(Update, track_activity), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("restart", handle_restart))
-    app.add_handler(CommandHandler("lang", handle_lang))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_photo))
