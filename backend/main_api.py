@@ -1224,11 +1224,11 @@ def start_bot(db: Session = Depends(get_db), _: bool = Depends(require_admin_or_
         try:
             _spawn_bot(row, _bot_log_file(row.id, is_default=True))
             return {'message': 'Bot started successfully', 'status': 'running'}
-    except HTTPException as e:
-        return {'message': e.detail, 'status': 'error'}
-    except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
-        return {'message': f'Failed to start bot: {str(e)}', 'status': 'error'}
+        except HTTPException as e:
+            return {'message': e.detail, 'status': 'error'}
+        except Exception as e:
+            logger.error(f"Failed to start bot: {e}")
+            return {'message': f'Failed to start bot: {str(e)}', 'status': 'error'}
 
 @app.post('/api/bot/stop')
 def stop_bot(db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
