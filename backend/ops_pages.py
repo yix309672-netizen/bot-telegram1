@@ -361,6 +361,20 @@ pre{background:#111827;color:#d1d5db;padding:12px;border-radius:8px;max-height:3
 <div class="card"><h2>操作审计（最新50条）</h2><div id="audit-list" class="list"></div>
 <button class="btn btn-gray" onclick="auditLoad()">刷新</button></div>
 </div>
+<div class="card"><h2>语言管理（机器人对话）</h2>
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
+<span>默认语言：</span><select id="lang-default"><option value="zh">中文</option><option value="en">English</option></select>
+<button class="btn" onclick="langDefaultSave()">保存默认</button>
+<span style="color:#999;font-size:13px;">新用户/机器人重启后生效</span>
+</div>
+<div id="lang-list" class="list"></div>
+<div style="display:flex;gap:10px;">
+<input id="lang-l" placeholder="语言(zh/en)" style="width:120px;">
+<input id="lang-k" placeholder="文案键" style="flex:1;">
+</div>
+<input id="lang-v" placeholder="改写后的文案（空=删改写）" style="margin-top:10px;">
+<button class="btn" onclick="langSave()">保存改写</button>
+</div>
 </div>
 <script>
 async function jget(u){ const r = await fetch(u); return r.json(); }
@@ -410,7 +424,29 @@ async function auditLoad(){
   if(!d.data){ document.getElementById('audit-list').innerHTML = '需登录查看'; return; }
   document.getElementById('audit-list').innerHTML = d.data.map(a=>'<div>['+a.method+'] '+a.path+' → '+a.status+' '+a.username+'</div>').join('') || '暂无';
 }
-cfgLoad(); upLoad(); userLoad(); auditLoad();
+async function langLoad(){
+  const d = await jget('/api/lang/list');
+  if(d.default) document.getElementById('lang-default').value = d.default;
+  document.getElementById('lang-list').innerHTML = (d.data||[]).map(x=>'<div>['+x.lang+'] '+x.key+' = '+(x.value||'').slice(0,60)+
+    ' <a href="javascript:langDel('+x.id+')" style="color:#dc2626;">删</a></div>').join('') || '暂无改写（用内置文案）';
+}
+async function langDefaultSave(){
+  const r = await fetch('/api/lang/default', {method:'PUT', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({lang:document.getElementById('lang-default').value})});
+  alert((await r.json()).message || '完成');
+}
+async function langSave(){
+  const body = {lang:document.getElementById('lang-l').value.trim()||'zh',
+    key:document.getElementById('lang-k').value.trim(), value:document.getElementById('lang-v').value};
+  if(!body.key){ alert('请填写文案键'); return; }
+  const r = await fetch('/api/lang/override', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  alert((await r.json()).message || '完成'); langLoad();
+}
+async function langDel(id){
+  if(!confirm('删除该改写？')) return;
+  await fetch('/api/lang/override/'+id, {method:'DELETE'}); langLoad();
+}
+cfgLoad(); upLoad(); userLoad(); auditLoad(); langLoad();
 </script>
 </body>
 </html>"""

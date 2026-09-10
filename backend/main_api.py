@@ -31,7 +31,7 @@ if __package__ in (None, ""):
     # 目录方式运行（Docker WORKDIR /app 内 uvicorn main_api:app）
     from core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
     from core.database import SystemConfig, UploadFile as UploadFileRecord, AdminUser, MallCate, MallGoods
-    from core.database import BotInstance, PhonePrefix
+    from core.database import BotInstance, PhonePrefix, LangString
     from core.jwt_manager import JWTManager
     from core.cache import cache, is_redis_live
     from core.security import SecurityUtils
@@ -43,7 +43,7 @@ else:
     # 包方式运行（pytest / uvicorn backend.main_api:app）
     from .core.database import get_db, init_db, PhoneNumber, SmsRecord, AuditLog, SessionLocal, DATABASE_URL
     from .core.database import SystemConfig, UploadFile as UploadFileRecord, AdminUser, MallCate, MallGoods
-    from .core.database import BotInstance, PhonePrefix
+    from .core.database import BotInstance, PhonePrefix, LangString
     from .core.jwt_manager import JWTManager
     from .core.cache import cache, is_redis_live
     from .core.security import SecurityUtils
@@ -1991,6 +1991,99 @@ def bot_instance_log(iid: int, num: int = 200, request: Request = None,
     if not content:
         return {'log': '（暂无日志，该机器人尚未启动过）'}
     return {'log': "".join(content[-num:])}
+
+
+def _bot_langs():
+    # 机器人支持语言与内置键（bot/lang.py无第三方依赖，可直接读）
+    try:
+        import importlib.util
+        p = os.path.join(_bot_dir(), "lang.py") if _bot_dir() else ""
+        if p and os.path.isfile(p):
+            spec = importlib.util.spec_from_file_location("bot_lang_ref", p)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            langs = [l for l, _ in mod.SUPPORTED]
+            keys = sorted(mod.STRINGS.get(langs[0], {}))
+            return langs, keys
+    except Exception as e:
+        logger.warning(f"读取机器人语言包失败: {e}")
+    return ["zh", "en"], []
+
+
+class LangOverrideIn(BaseModel):
+    lang: str
+    key: str
+    value: str
+
+
+@app.get('/api/lang/list')
+def lang_list(db: Session = Depends(get_db), _: bool = Depends(verify_api_key)):
+    langs, keys = _bot_langs()
+    rows = db.query(LangString).order_by(LangString.lang, LangString.key).all()
+    default = os.getenv("DEFAULT_LANG", "")
+    if not default:
+        default = _read_bot_env().get("DEFAULT_LANG", "zh")
+    return {'langs': langs, 'default': default, 'builtin_keys': keys,
+            'data': [{'id': r.id, 'lang': r.lang, 'key': r.key, 'value': r.value} for r in rows]}
+
+
+@app.get('/api/lang/overrides')
+def lang_overrides(db: Session = Depends(get_db)):
+    # 机器人启动同步用（公开只读：仅自定义文案）
+    out = {}
+    for r in db.query(LangString).all():
+        out.setdefault(r.lang, {})[r.key] = r.value
+    return out
+
+
+@app.put('/api/lang/override')
+def lang_override(body: LangOverrideIn, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    langs, keys = _bot_langs()
+    if body.lang not in langs:
+        raise HTTPException(status_code=422, detail="语言不支持")
+    if keys and body.key not in keys:
+        raise HTTPException(status_code=422, detail="文案键不存在")
+    if not body.value or len(body.value) > 2000:
+        raise HTTPException(status_code=422, detail="文案非法")
+    row = db.query(LangString).filter(LangString.lang == body.lang, LangString.key == body.key).first()
+    if row:
+        row.value = body.value
+    else:
+        db.add(LangString(lang=body.lang, key=body.key, value=body.value))
+    db.commit()
+    return {'message': '已保存，机器人重启后生效'}
+
+
+@app.delete('/api/lang/override/{oid}')
+def lang_override_del(oid: int, db: Session = Depends(get_db), _: bool = Depends(require_admin_or_key)):
+    row = db.query(LangString).filter(LangString.id == oid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="不存在")
+    db.delete(row)
+    db.commit()
+    return {'message': '已删除，机器人重启后生效'}
+
+
+class LangDefaultIn(BaseModel):
+    lang: str
+
+
+@app.get('/api/lang/default')
+def lang_default_get(_: bool = Depends(verify_api_key)):
+    langs, _ = _bot_langs()
+    default = os.getenv("DEFAULT_LANG", "") or _read_bot_env().get("DEFAULT_LANG", "zh")
+    if default not in langs:
+        default = "zh"
+    return {'default': default, 'langs': langs}
+
+
+@app.put('/api/lang/default')
+def lang_default_put(body: LangDefaultIn, _: bool = Depends(require_admin_or_key)):
+    langs, _ = _bot_langs()
+    if body.lang not in langs:
+        raise HTTPException(status_code=422, detail="语言不支持")
+    _write_bot_env({"DEFAULT_LANG": body.lang})
+    return {'message': '默认语言已保存，机器人重启后生效'}
 
 
 if __name__ == "__main__":

@@ -164,6 +164,12 @@ docker-compose down
 - 网页：监控台“桌面多号切换”卡一键切换；接口 `/api/telegram/accounts` + `/api/telegram/switch`（需管理员）
 - 切换自动备份当前上线号（`live_backup_*.zip`），tdata 优先用完整目录、其次转换包
 
+## 机器人多语言（中英）
+
+- 用户端：对话中点“🌐 语言 / Language”或发 `/lang`，选中文/English，全流程（键盘/提示/成功语）即时切换
+- 网页端：系统管理页“语言管理”设默认语言、在线改任意文案（机器人重启生效）
+- 加语言：`bot/lang.py` 加一个 dict 即可；接口 `/api/lang/*`
+
 ## 多机器人并行（最多10个）
 
 BOT控制台页点“添加机器人”即多一张凭证卡（token/ID/HASH各存各的），每卡独立启动/停止/测试/日志/删除；

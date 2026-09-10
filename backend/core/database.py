@@ -128,8 +128,7 @@ class BotInstance(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-class PhonePrefix(Base):
-    # 号段表：定向生成用（实号率/推荐度为外部平台参考值，可自行维护）
+class PhonePrefix(Base):    # 号段表：定向生成用（实号率/推荐度为外部平台参考值，可自行维护）
     __tablename__ = "phone_prefix"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -139,6 +138,17 @@ class PhonePrefix(Base):
     stars: Mapped[int] = mapped_column(Integer, default=0)
     remark: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class LangString(Base):
+    # 语言文案改写表：覆盖机器人内置文案（lang/key唯一）
+    __tablename__ = "lang_strings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lang: Mapped[str] = mapped_column(String(10), default="zh", index=True)
+    key: Mapped[str] = mapped_column(String(100), index=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 def _default_sqlite_url() -> str:

@@ -9,3 +9,5 @@ os.environ.setdefault("ENABLE_AUTH", "false")
 os.environ.setdefault("API_KEY", "")
 os.environ.setdefault("JWT_SECRET", "pytest-fixed-test-secret")
 os.environ.setdefault("RATE_LIMIT_REQUESTS", "100")
+# 全量套件同IP请求多，提额防429污染（限流单测仍按用例级阈值验证）
+os.environ["RATE_LIMIT_REQUESTS"] = "10000"
