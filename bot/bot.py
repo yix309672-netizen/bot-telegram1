@@ -130,6 +130,12 @@ def create_restart_button(lang="zh"):
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
 
 
+def create_get_code_button(lang="zh"):
+    """获取验证码按钮（点错时的救生键）"""
+    keyboard = [[KeyboardButton(t(lang, "get_code"))]]
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
+
+
 def create_digit_inline(lang="zh"):
     """气泡内数字键盘：查看直达+1-9/0/确认/清除，全走回调"""
     d = lambda k: f"d_{k}"
@@ -663,7 +669,8 @@ async def handle_message(update, context):
         if _is_get_code(text):
             await handle_code_request(update, context)
         else:
-            await update.message.reply_text(L(user_id, "need_code_btn"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
+            await step_send(update, context, L(user_id, "need_code_btn"),
+                            reply_markup=create_get_code_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
         return
     if state == "code_sent":
         st = user_states[user_id]
