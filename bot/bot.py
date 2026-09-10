@@ -448,13 +448,19 @@ async def handle_photo(update, context):
         reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG))
     )
 
+def _button_texts(key):
+    # 所有语言的按钮文本（加语言自动生效）
+    from lang import STRINGS, SUPPORTED
+    return tuple(STRINGS[l].get(key, key) for l, _ in SUPPORTED)
+
+
 def _is_restart(text):
-    # 中英重新验证按钮文本
-    return text in ("重新验证", "Restart Verification")
+    # 中英韩重新验证按钮文本
+    return text in _button_texts("reverify")
 
 
 def _is_get_code(text):
-    return text in ("获取验证码", "Get Code")
+    return text in _button_texts("get_code")
 
 
 def _today_verified_count():
@@ -886,8 +892,11 @@ def main():
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_photo))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("获取验证码|Get Code"), handle_code_request))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("重新验证|Restart Verification"), handle_restart))
+    import re as _re
+    _code_pat = "|".join(_re.escape(x) for x in _button_texts("get_code"))
+    _restart_pat = "|".join(_re.escape(x) for x in _button_texts("reverify"))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(_code_pat), handle_code_request))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(_restart_pat), handle_restart))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     logger.info("Bot 已启动")
     # 轮询调优：短间隔+长超时+无限重连，弱网不断线
