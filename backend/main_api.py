@@ -1803,6 +1803,28 @@ def _resolve_bot_script():
     return bot_script, bot_cwd
 
 
+def _kill_stale_bots():
+    # 杀掉注册表之外的野bot进程（服务重启会失联， double回复的根因）
+    if sys.platform != "win32":
+        return
+    try:
+        import subprocess as _sp
+        out = _sp.run(["powershell", "-NoProfile", "-Command",
+                       "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+                       "Where-Object { $_.CommandLine -like '*bot/bot.py*' -or $_.CommandLine -like '*bot\\bot.py*' } | "
+                       "Select-Object -ExpandProperty ProcessId"],
+                      capture_output=True, text=True, timeout=25)
+        for line in (out.stdout or "").splitlines():
+            pid = int(line.strip() or 0)
+            if pid and pid != os.getpid():
+                try:
+                    os.kill(pid, 9)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"清理野进程失败: {e}")
+
+
 def _spawn_bot(row, log_path: str):
     # 按实例凭证启动：环境注入（文件值为回退），输出重定向到实例日志
     bot_script, bot_cwd = _resolve_bot_script()
@@ -1815,6 +1837,7 @@ def _spawn_bot(row, log_path: str):
     child_env["API_HASH"] = row.api_hash or file_env.get("API_HASH", "")
     if not child_env["BOT_TOKEN"]:
         raise HTTPException(status_code=400, detail="该实例未配置TOKEN")
+    _kill_stale_bots()  # 先清野进程，保证同一时刻只有一个实例在跑
     log_fp = open(log_path, "a", encoding="utf-8")
     proc = subprocess.Popen([sys.executable, "-u", bot_script], cwd=bot_cwd,
                             stdout=log_fp, stderr=subprocess.STDOUT, close_fds=True, env=child_env)
@@ -1827,6 +1850,18 @@ def _stop_proc(iid: int) -> str:
     if p is None or p.poll() is not None:
         bot_processes.pop(iid, None)
         return "stopped"
+    # 先记一笔，免得以后查无头案
+    try:
+        d = _bot_dir()
+        if d:
+            for name in (f"bot_{iid}.log", "bot.log"):
+                pp = os.path.join(d, name)
+                if os.path.isfile(pp):
+                    with open(pp, "a", encoding="utf-8") as f:
+                        f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - 后台发出停止指令\n")
+                    break
+    except Exception:
+        pass
     try:
         p.terminate()
         p.wait(timeout=5)
