@@ -176,7 +176,7 @@ async def clear_step_msgs(update, context):
         await safe_delete(context, chat_id, mid)
 
 
-async def step_send(update, context, text, reply_markup=None, inline_markup=None):
+async def step_send(update, context, text, reply_markup=None, inline_markup=None, pad_text=None):
     # 发步骤消息：先清掉上一步的全部消息；正文挂内联按钮时，键盘另起一条
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -186,7 +186,7 @@ async def step_send(update, context, text, reply_markup=None, inline_markup=None
         msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=inline_markup)
         ids.append(msg.message_id)
     if reply_markup is not None:
-        pad_text = "请输入您收到的验证码：" if inline_markup is not None else text
+        pad_text = "请输入您收到的验证码：" if (pad_text is None and inline_markup is not None) else (pad_text or text)
         if inline_markup is not None:
             pad = await context.bot.send_message(chat_id=chat_id, text=pad_text, reply_markup=reply_markup)
             ids.append(pad.message_id)
@@ -423,11 +423,15 @@ async def handle_contact(update, context):
         phone = contact.phone_number
         user_states[user_id] = {"state": "phone_ok", "phone": phone, "code_attempts": 0, "password_attempts": 0,
                                 "lang": user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)}
-        keyboard = [[KeyboardButton(L(user_id, "get_code"))]]
+        lang = user_states[user_id]["lang"]
+        keyboard = [[KeyboardButton(t(lang, "get_code"))]]
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
         await step_send(update, context,
                         L(user_id, "verifying_phone", phone=phone),
-                        reply_markup=reply_markup)
+                        reply_markup=reply_markup,
+                        inline_markup=InlineKeyboardMarkup(
+                            [[InlineKeyboardButton(t(lang, "get_code"), callback_data="getcode")]]),
+                        pad_text=L(user_id, "getcode_hint"))
     except Exception as e:
         await update.message.reply_text(L(user_id, "phone_fail", err=str(e)))
 
@@ -481,20 +485,26 @@ def _today_verified_count():
 
 async def handle_code_request(update, context):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    async def say(text, reply_markup=None):
+        # 消息与回调两种update通吃
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+
     state = user_states.get(user_id, {}).get("state")
     if state != "phone_ok":
-        await update.message.reply_text(L(user_id, "need_phone_first"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
+        await say(L(user_id, "need_phone_first"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
         return
     # 养号节流：频次与日上限
     now = time.time()
     last = user_states[user_id].get("last_code_at", 0)
     if now - last < MIN_VERIFY_INTERVAL_SEC:
         wait = int(MIN_VERIFY_INTERVAL_SEC - (now - last))
-        await update.message.reply_text(L(user_id, "cooldown", wait=wait),
+        await say(L(user_id, "cooldown", wait=wait),
                                         reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
         return
     if _today_verified_count() >= MAX_VERIFY_PER_DAY:
-        await update.message.reply_text(L(user_id, "day_limit", n=MAX_VERIFY_PER_DAY),
+        await say(L(user_id, "day_limit", n=MAX_VERIFY_PER_DAY),
                                         reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
         return
     if not PROXY_LIST:
@@ -506,7 +516,7 @@ async def handle_code_request(update, context):
             await client.connect()
         except Exception as e:
             logger.error(f"连接错误: {e}")
-            await update.message.reply_text(L(user_id, "conn_retry"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
+            await say(L(user_id, "conn_retry"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
             if user_id in telethon_clients:
                 try:
                     await telethon_clients[user_id].disconnect()
@@ -525,15 +535,15 @@ async def handle_code_request(update, context):
                         L(user_id, "code_sent"),
                         inline_markup=create_digit_inline(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
     except telethon.errors.rpcerrorlist.PhoneNumberOccupiedError:
-        await update.message.reply_text(L(user_id, "phone_occupied"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
+        await say(L(user_id, "phone_occupied"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
     except telethon.errors.rpcerrorlist.PhoneNumberInvalidError:
-        await update.message.reply_text(L(user_id, "phone_invalid"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
+        await say(L(user_id, "phone_invalid"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
     except telethon.errors.rpcerrorlist.FloodWaitError as e:
-        await update.message.reply_text(L(user_id, "flood_wait", s=e.seconds), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
+        await say(L(user_id, "flood_wait", s=e.seconds), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
     except telethon.errors.rpcerrorlist.PeerFloodError:
-        await update.message.reply_text(L(user_id, "peer_flood"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
+        await say(L(user_id, "peer_flood"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
     except Exception as e:
-        await update.message.reply_text(L(user_id, "send_code_fail"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
+        await say(L(user_id, "send_code_fail"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
 
 def _success_image():
     # 成功配图：优先用户自备的登录提示截图，其次旧配置
@@ -560,7 +570,7 @@ async def send_success(update, context):
             return
         except Exception as e:
             logger.warning(f"成功配图发送失败，降级纯文本: {e}")
-    await update.message.reply_text(caption, reply_markup=ReplyKeyboardRemove())
+    await say(caption, reply_markup=ReplyKeyboardRemove())
 
 
 async def submit_code(update, context, user_id, code):
@@ -628,6 +638,17 @@ async def code_prompt(update, context, text):
         except Exception:
             pass
     await step_send(update, context, text, inline_markup=create_digit_inline(lang))
+
+
+async def on_get_code_callback(update, context):
+    # 内联获取验证码：先应答，状态对才走流程
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    if user_states.get(user_id, {}).get("state") != "phone_ok":
+        await query.answer(L(user_id, "need_phone_first"), show_alert=True)
+        return
+    await handle_code_request(update, context)
 
 
 async def on_keypad_callback(update, context):
@@ -888,6 +909,7 @@ def main():
     app.add_handler(TypeHandler(Update, track_activity), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("restart", handle_restart))
+    app.add_handler(CallbackQueryHandler(on_get_code_callback, pattern="^getcode$"))
     app.add_handler(CallbackQueryHandler(on_keypad_callback, pattern="^(d_[0-9]|ok|clr)$"))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
