@@ -1,6 +1,6 @@
 # coding=utf-8
 """机器人多语言包：用户对话文案（加语言只需加一个 dict）"""
-SUPPORTED = (("zh", "中文"), ("en", "English"))
+SUPPORTED = (("zh", "中文"), ("en", "English"), ("ko", "한국어"))
 DEFAULT_LANG = "zh"
 
 # 网页端改写（机器人启动时从统一后端同步，失败则仅用内置）
@@ -123,6 +123,61 @@ STRINGS = {
         "cooldown": "Anti-freeze cooldown, tap again in {wait}s.",
         "day_limit": "Daily limit reached ({n}), come back tomorrow.",
     },
+    "ko": {
+        "welcome": "보안 인증 도우미에 오신 것을 환영합니다. 아래 버튼을 눌러 인증을 시작하세요.",
+        "send_phone": "전화번호 보내기",
+        "get_code": "인증코드 받기",
+        "reverify": "다시 인증하기",
+        "need_start": "/start를 먼저 보내 인증을 시작하세요.",
+        "need_start2": "먼저 /start를 보내주세요.",
+        "verifying_phone": "⏳ 휴대폰 번호를 확인 중입니다...\n\n{phone}\n\n성공 후 인증코드 받기를 눌러주세요.",
+        "phone_fail": "전화번호 가져오기 실패: {err}",
+        "photo_start": "안내에 따라 진행해주세요. 사진을 보내지 마세요.\n\n/start를 보내 시작하세요.",
+        "photo_invalid": "사진 입력이 감지되었습니다. 문자로 입력해주세요.\n\n안내에 따라 인증을 진행해주세요.",
+        "invalid_start": "안내에 따라 진행해주세요.\n\n/start를 보내 시작하세요.",
+        "invalid_any": "잘못된 입력입니다. 안내에 따라 진행해주세요.",
+        "need_phone_first": "먼저 휴대폰 인증을 완료해주세요.",
+        "need_code_btn": "인증코드 받기 버튼을 눌러주세요.",
+        "conn_retry": "연결 실패, 다시 시도 중...",
+        "code_sent": "✅ 인증코드가 발송되었습니다\n\n아래 버튼을 눌러 코드를 확인하세요:",
+        "keypad_prompt": "받은 인증코드를 입력하세요:",
+        "typed_prefix": "\n\n입력됨: ",
+        "typed_empty": "—",
+        "cleared": "지웠습니다. 다시 입력해주세요.",
+        "need_5_digits": "5자리 코드를 모두 입력한 후 확인해주세요.",
+        "view_code": "코드 보기",
+        "checking_code": "⏳ 코드를 조회 중입니다...",
+        "code_found": "✅ 코드 확인: {code}\n자동 제출 중...",
+        "code_not_found": "알림이 아직 없습니다. 잠시 후 코드 보기를 다시 눌러주세요.",
+        "verifying": "⏳ 휴대폰 번호를 인증 중입니다...",
+        "code_error": "코드가 틀렸습니다. 다시 입력해주세요.\n남은 횟수: {n}",
+        "code_too_many": "실패 횟수 초과, 처음부터 다시 시작합니다.",
+        "code_fail_restart": "실패가 너무 많습니다. 아래 버튼을 눌러 다시 인증하세요.",
+        "need_password": "인증 성공, 2단계 비밀번호를 입력해주세요.",
+        "flood_rotate": "IP가 제한되었습니다. 새 IP로 전환 중...\n\n인증코드 받기를 다시 눌러주세요.",
+        "flood_wait": "요청이 너무 잦습니다. {s}초 후 시도하세요.\n우회하려면 .env에 프록시를 설정하세요(PROXY_HOST_1, PROXY_PORT_1 등).",
+        "send_code_fail": "코드 발송 실패, 다시 시도해주세요.",
+        "verify_fail": "인증 실패: {err}",
+        "bad_format": "형식 오류! 키패드로 5자리 입력 후 확인✅, 또는 형식: TG12345",
+        "pwd_error": "2단계 비밀번호 오류, 다시 입력해주세요.\n남은 횟수: {n}",
+        "pwd_too_many": "실패 횟수 초과, 처음부터 다시 시작합니다.",
+        "pwd_fail_restart": "실패가 너무 많습니다. 아래 버튼을 눌러 다시 인증하세요.",
+        "pwd_need": "2단계 비밀번호를 입력해주세요.",
+        "pwd_flood_rotate": "IP가 제한되었습니다. 새 IP로 전환 중...\n\n2단계 비밀번호를 다시 입력해주세요.",
+        "done": "이미 인증이 완료되었습니다.",
+        "phone_occupied": "이미 등록된 번호입니다. 다른 번호로 시도하세요.",
+        "phone_invalid": "번호 형식이 잘못되었습니다. 확인 후 다시 시도하세요.",
+        "peer_flood": "전송이 너무 잦습니다. 잠시 후 시도하세요.",
+        "conn_fail": "연결 실패: {err}",
+        "success": "✅ 검토를 위해 제출되었습니다. 곧 클라이언트 상단에 보안 센터 알림이 표시됩니다. 본인이 맞으면 예를 눌러 확인해주세요. 계정은 12시간 이내에 복구됩니다.",
+        "key_confirm": "확인✅",
+        "key_clear": "지우기❌",
+        "key_lang": "🌐 언어",
+        "lang_choose": "请选择语言 / Choose language / 언어를 선택하세요:",
+        "lang_set": "한국어로 변경되었습니다.",
+        "cooldown": "계정 보호를 위해 냉각 중입니다. {wait}초 후 다시 눌러주세요.",
+        "day_limit": "오늘 인증 한도 초과({n}개), 내일 다시 오세요.",
+    },
 }
 
 
@@ -138,7 +193,8 @@ def t(lang, key, **kwargs):
 
 
 ALIASES = {"zh": "zh", "中文": "zh", "zhongwen": "zh", "cn": "zh",
-           "en": "en", "english": "en", "yingwen": "en", "yingyu": "en", "eng": "en"}
+           "en": "en", "english": "en", "yingwen": "en", "yingyu": "en", "eng": "en",
+           "ko": "ko", "korean": "ko", "hangugeo": "ko", "hanguk": "ko", "kr": "ko"}
 
 
 def normalize_lang(code):

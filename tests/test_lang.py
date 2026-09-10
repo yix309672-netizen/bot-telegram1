@@ -10,7 +10,7 @@ client = TestClient(app)
 
 def test_lang_list_shape():
     d = client.get('/api/lang/list').json()
-    assert set(d['langs']) >= {'zh', 'en'} and d['default'] in d['langs']
+    assert set(d['langs']) >= {'zh', 'en', 'ko'} and d['default'] in d['langs']
     assert 'welcome' in d['builtin_keys'] and 'success' in d['builtin_keys']
 
 

@@ -363,13 +363,13 @@ pre{background:#111827;color:#d1d5db;padding:12px;border-radius:8px;max-height:3
 </div>
 <div class="card"><h2>语言管理（机器人对话）</h2>
 <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
-<span>默认语言：</span><select id="lang-default"><option value="zh">中文</option><option value="en">English</option></select>
+<span>默认语言：</span><select id="lang-default"><option value="zh">中文</option><option value="en">English</option><option value="ko">한국어</option></select>
 <button class="btn" onclick="langDefaultSave()">保存默认</button>
 <span style="color:#999;font-size:13px;">新用户/机器人重启后生效</span>
 </div>
 <div id="lang-list" class="list"></div>
 <div style="display:flex;gap:10px;">
-<input id="lang-l" placeholder="语言(zh/en)" style="width:120px;">
+<input id="lang-l" placeholder="语言(zh/en/ko)" style="width:120px;">
 <input id="lang-k" placeholder="文案键" style="flex:1;">
 </div>
 <input id="lang-v" placeholder="改写后的文案（空=删改写）" style="margin-top:10px;">
