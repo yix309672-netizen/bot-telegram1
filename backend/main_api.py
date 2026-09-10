@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import threading
 import logging
 import hashlib
 import secrets
@@ -1217,11 +1218,12 @@ def start_bot(db: Session = Depends(get_db), _: bool = Depends(require_admin_or_
     row = _default_bot(db)
     if not row:
         return {'message': '没有任何机器人实例，请先添加', 'status': 'error'}
-    if _bot_alive(row.id):
-        return {'message': 'Bot is already running', 'status': 'running'}
-    try:
-        _spawn_bot(row, _bot_log_file(row.id, is_default=True))
-        return {'message': 'Bot started successfully', 'status': 'running'}
+    with _start_lock:
+        if _bot_alive(row.id):
+            return {'message': 'Bot is already running', 'status': 'running'}
+        try:
+            _spawn_bot(row, _bot_log_file(row.id, is_default=True))
+            return {'message': 'Bot started successfully', 'status': 'running'}
     except HTTPException as e:
         return {'message': e.detail, 'status': 'error'}
     except Exception as e:
@@ -1748,6 +1750,7 @@ def tg_switch(body: TgSwitch, _: bool = Depends(require_admin_or_key)):
 # ================= 多机器人实例（上限10个并行） =================
 MAX_BOTS = 10
 bot_processes: dict = {}
+_start_lock = threading.Lock()
 
 
 def _default_bot(db: Session):
@@ -1969,10 +1972,11 @@ def start_bot_instance(iid: int, db: Session = Depends(get_db), _: bool = Depend
     row = db.query(BotInstance).filter(BotInstance.id == iid).first()
     if not row:
         raise HTTPException(status_code=404, detail="机器人不存在")
-    if _bot_alive(iid):
-        return {'message': f'{row.name}已在运行中', 'status': 'running', 'id': iid}
-    first = db.query(BotInstance).order_by(BotInstance.id).first()
-    _spawn_bot(row, _bot_log_file(iid, is_default=bool(first and first.id == iid)))
+    with _start_lock:  # 串行化：防并发双点同时通过存活检查
+        if _bot_alive(iid):
+            return {'message': f'{row.name}已在运行中', 'status': 'running', 'id': iid}
+        first = db.query(BotInstance).order_by(BotInstance.id).first()
+        _spawn_bot(row, _bot_log_file(iid, is_default=bool(first and first.id == iid)))
     return {'message': f'{row.name}启动成功', 'status': 'running', 'id': iid}
 
 

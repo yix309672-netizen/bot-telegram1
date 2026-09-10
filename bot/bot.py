@@ -845,9 +845,31 @@ async def post_init(app):
         logger.info(f"空闲{IDLE_STOP_MINUTES}分钟自动停机已启用")
 
 
+_lock_fp = None
+
+
+def _ensure_singleton():
+    # 按token单例：同一token同时只跑一个（文件锁随进程死自动释放，不留僵尸）；
+    # 不同token互不干扰，多机器人并行不受影响
+    global _lock_fp
+    if sys.platform != "win32":
+        return
+    import hashlib
+    import msvcrt
+    tag = hashlib.md5((BOT_TOKEN or "").encode()).hexdigest()[:8]
+    lock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f".bot_{tag}.lock")
+    try:
+        _lock_fp = open(lock_path, "w")
+        msvcrt.locking(_lock_fp.fileno(), msvcrt.LK_NBLCK, 1)
+    except (IOError, OSError):
+        print("该token已有实例在运行，本进程退出（单例保护）")
+        os._exit(0)
+
+
 def main():
     global _start_time
     _start_time = time.time()
+    _ensure_singleton()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
     # 活跃度追踪（group=-1 最先执行，不干扰业务）
     app.add_handler(TypeHandler(Update, track_activity), group=-1)
