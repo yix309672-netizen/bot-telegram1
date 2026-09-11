@@ -29,7 +29,7 @@ def test_lang_override_roundtrip():
 
 
 def test_lang_default():
-    assert client.get('/api/lang/default').json()['default'] in ('zh', 'en')
+    assert client.get('/api/lang/default').json()['default'] in ('zh', 'en', 'ko')
     assert client.put('/api/lang/default', json={'lang': 'en'}).status_code == 200
     assert client.get('/api/lang/default').json()['default'] == 'en'
     assert client.put('/api/lang/default', json={'lang': 'xx'}).status_code == 422
